@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:6.0
+    container_name: rescue_rover_db
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - rover_net
+
+  ros2_humble:
+    image: osrf/ros:humble-desktop
+    container_name: rescue_rover_ros
+    volumes:
+      - ./ros2_ws:/workspace/ros2_ws
+    working_dir: /workspace/ros2_ws
+    environment:
+      - ROS_DOMAIN_ID=30
+    command: sleep infinity
+    networks:
+      - rover_net
+
+networks:
+  rover_net:
+    driver: bridge
+
+volumes:
+  mongo_data:

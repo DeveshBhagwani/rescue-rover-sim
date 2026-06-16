@@ -3,6 +3,8 @@ import Link from './Link';
 import RevoluteJoint from './RevoluteJoint';
 import PrismaticJoint from './PrismaticJoint';
 import SphericalJoint from './SphericalJoint';
+import WorkspaceVisualization from './WorkspaceVisualization';
+import { useSimulation } from '../../context/SimulationContext';
 
 interface RobotArmProps {
   // Array of 6 values: [J1_rad, J2_rad, J3_m, J4_rad, J5_rad, J6_rad]
@@ -16,6 +18,8 @@ interface RobotArmProps {
  * J3 (Prismatic Y) -> Link 3 -> J4/5/6 (Spherical) -> End Effector Gripper
  */
 export const RobotArm: React.FC<RobotArmProps> = ({ jointValues }) => {
+  const { isWorkspaceVisible } = useSimulation();
+
   // Unpack joint values safely with fallbacks
   const q1 = jointValues[0] || 0; // J1 Revolute Waist (rad)
   const q2 = jointValues[1] || 0; // J2 Revolute Shoulder (rad)
@@ -26,6 +30,9 @@ export const RobotArm: React.FC<RobotArmProps> = ({ jointValues }) => {
 
   return (
     <group name="robot_arm_base">
+      {/* 3D Workspace boundary representation */}
+      <WorkspaceVisualization visible={isWorkspaceVisible} />
+
       {/* Base Column / Mount Anchor */}
       <Link length={0.15} radius={0.06} axis="y" color="#475569" />
 

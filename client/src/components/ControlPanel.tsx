@@ -1,17 +1,28 @@
 import React from 'react';
 import { useSimulation } from '../context/SimulationContext';
 import JointSlider from './JointSlider';
-import { RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square } from 'lucide-react';
+import { RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Sliders, Target, Eye, EyeOff } from 'lucide-react';
 
 export const ControlPanel: React.FC = () => {
   const { 
     jointValues, 
     setJointValue, 
+    targetX,
+    targetY,
+    targetZ,
+    targetRoll,
+    targetPitch,
+    targetYaw,
+    setTargetCartesian,
+    controlMode,
+    setControlMode,
+    isWorkspaceVisible,
+    setIsWorkspaceVisible,
     sendDriveCommand, 
     resetSimulation 
   } = useSimulation();
 
-  // Joint specifications
+  // Joint Space specifications
   const jointSpecs = [
     { label: 'J1: Base Yaw (Revolute)', min: -Math.PI, max: Math.PI, unit: 'rad' },
     { label: 'J2: Shoulder Pitch (Revolute)', min: -Math.PI / 2, max: Math.PI / 2, unit: 'rad' },
@@ -27,7 +38,7 @@ export const ControlPanel: React.FC = () => {
 
   return (
     <div className="w-80 h-full flex flex-col glassmorphism border-r border-dark-border p-4 text-dark-text overflow-y-auto select-none">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-4">
         <h2 className="text-lg font-bold font-mono tracking-wider text-cyan-400">COMMAND PORTAL</h2>
         <button
           onClick={resetSimulation}
@@ -38,28 +49,141 @@ export const ControlPanel: React.FC = () => {
         </button>
       </div>
 
-      {/* SECTION: Robotic Arm Control */}
+      {/* Control Mode Toggle Tabs */}
+      <div className="flex bg-dark-bg/60 p-1 rounded-lg border border-dark-border mb-4 font-mono text-xs">
+        <button
+          onClick={() => setControlMode('joint')}
+          className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-md transition-all ${
+            controlMode === 'joint' 
+              ? 'bg-cyan-500/25 border border-cyan-500/50 text-cyan-300 font-bold' 
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Sliders className="w-3.5 h-3.5" />
+          JOINT SPACE
+        </button>
+        <button
+          onClick={() => setControlMode('task')}
+          className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-md transition-all ${
+            controlMode === 'task' 
+              ? 'bg-purple-500/25 border border-purple-500/50 text-purple-300 font-bold' 
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Target className="w-3.5 h-3.5" />
+          TASK SPACE
+        </button>
+      </div>
+
+      {/* Workspace Bounding Visualizer toggle */}
+      <button
+        onClick={() => setIsWorkspaceVisible(!isWorkspaceVisible)}
+        className={`w-full flex items-center justify-center gap-2 py-2 mb-4 rounded-lg border font-mono text-xs transition duration-200 ${
+          isWorkspaceVisible 
+            ? 'bg-cyan-550/20 border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10' 
+            : 'bg-dark-card border-dark-border text-slate-400 hover:border-slate-600 hover:text-slate-300'
+        }`}
+      >
+        {isWorkspaceVisible ? (
+          <>
+            <EyeOff className="w-4 h-4 text-cyan-400" />
+            HIDE WORKSPACE BOUNDS
+          </>
+        ) : (
+          <>
+            <Eye className="w-4 h-4 text-slate-400" />
+            SHOW WORKSPACE BOUNDS
+          </>
+        )}
+      </button>
+
+      {/* SECTION: Arm Actuation Controllers */}
       <div className="mb-6">
         <h3 className="text-xs font-bold font-mono text-slate-400 uppercase tracking-widest mb-4 border-b border-dark-border pb-1">
-          Manipulator Controls
+          {controlMode === 'joint' ? 'Manual Joint Sliders' : 'Cartesian IK Targets'}
         </h3>
-        
-        {jointSpecs.map((spec, i) => (
-          <JointSlider
-            key={`slider-${i}`}
-            label={spec.label}
-            min={spec.min}
-            max={spec.max}
-            unit={spec.unit}
-            step={spec.step || 0.01}
-            value={jointValues[i] !== undefined ? jointValues[i] : 0}
-            onChange={(val) => setJointValue(i, val)}
-          />
-        ))}
+
+        {controlMode === 'joint' ? (
+          /* JOINT MODE: Display J1-J6 sliders */
+          jointSpecs.map((spec, i) => (
+            <JointSlider
+              key={`slider-${i}`}
+              label={spec.label}
+              min={spec.min}
+              max={spec.max}
+              unit={spec.unit}
+              step={spec.step || 0.01}
+              value={jointValues[i] !== undefined ? jointValues[i] : 0}
+              onChange={(val) => setJointValue(i, val)}
+            />
+          ))
+        ) : (
+          /* TASK MODE: Display Cartesian target sliders */
+          <div className="space-y-4">
+            <JointSlider
+              label="Target X (Left/Right)"
+              min={-0.6}
+              max={0.6}
+              unit="m"
+              step={0.01}
+              value={targetX}
+              onChange={(val) => setTargetCartesian(val, targetY, targetZ, targetRoll, targetPitch, targetYaw)}
+            />
+            <JointSlider
+              label="Target Y (Elevation)"
+              min={0.15}
+              max={0.85}
+              unit="m"
+              step={0.01}
+              value={targetY}
+              onChange={(val) => setTargetCartesian(targetX, val, targetZ, targetRoll, targetPitch, targetYaw)}
+            />
+            <JointSlider
+              label="Target Z (Forward/Back)"
+              min={-0.6}
+              max={0.6}
+              unit="m"
+              step={0.01}
+              value={targetZ}
+              onChange={(val) => setTargetCartesian(targetX, targetY, val, targetRoll, targetPitch, targetYaw)}
+            />
+            
+            <div className="pt-2 border-t border-dark-border/40">
+              <div className="text-[10px] text-slate-500 font-mono mb-2">WRIST ORIENTATION TARGETS</div>
+              <JointSlider
+                label="Wrist Yaw (Y)"
+                min={-Math.PI}
+                max={Math.PI}
+                unit="rad"
+                step={0.05}
+                value={targetYaw}
+                onChange={(val) => setTargetCartesian(targetX, targetY, targetZ, targetRoll, targetPitch, val)}
+              />
+              <JointSlider
+                label="Wrist Pitch (X)"
+                min={-Math.PI / 2}
+                max={Math.PI / 2}
+                unit="rad"
+                step={0.05}
+                value={targetPitch}
+                onChange={(val) => setTargetCartesian(targetX, targetY, targetZ, targetRoll, val, targetYaw)}
+              />
+              <JointSlider
+                label="Wrist Roll (Z)"
+                min={-Math.PI}
+                max={Math.PI}
+                unit="rad"
+                step={0.05}
+                value={targetRoll}
+                onChange={(val) => setTargetCartesian(targetX, targetY, targetZ, val, targetPitch, targetYaw)}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* SECTION: Mobile Rover Driving */}
-      <div className="mt-auto">
+      <div className="mt-auto pt-4 border-t border-dark-border/60">
         <h3 className="text-xs font-bold font-mono text-slate-400 uppercase tracking-widest mb-4 border-b border-dark-border pb-1">
           Mobile Base Drive
         </h3>
@@ -103,10 +227,6 @@ export const ControlPanel: React.FC = () => {
           </button>
           <div />
         </div>
-        
-        <p className="text-[10px] text-slate-500 text-center font-mono">
-          Click buttons to issue discrete velocity commands to differential drive controllers.
-        </p>
       </div>
     </div>
   );

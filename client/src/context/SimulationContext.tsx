@@ -2,6 +2,8 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { Vector3D } from '../math/Vector3D';
 import { Matrix4x4 } from '../math/Matrix4x4';
 import KinematicsSolver from '../math/KinematicsSolver';
+import DynamicsSolver from '../math/DynamicsSolver';
+import TrajectoryPlanner from '../math/TrajectoryPlanner';
 
 export type ControlMode = 'joint' | 'task';
 
@@ -19,8 +21,14 @@ interface SimulationContextType {
   targetPitch: number;
   targetYaw: number;
   
-  // Active End Effector Position (computed from current jointValues via FK)
+  // Active End Effector Position (computed via FK)
   endEffectorPos: { x: number; y: number; z: number };
+  
+  // Dynamics Telemetries
+  jointTorques: number[]; // holding loads in N*m
+  manipulability: number; // Yoshikawa index
+  isTrajectoryActive: boolean;
+  isSmoothMode: boolean;
   
   // Telemetries & Health
   lidarRange: number;
@@ -38,6 +46,8 @@ interface SimulationContextType {
   setTargetCartesian: (x: number, y: number, z: number, r?: number, p?: number, yawVal?: number) => void;
   setControlMode: (mode: ControlMode) => void;
   setIsWorkspaceVisible: (visible: boolean) => void;
+  setIsSmoothMode: (smooth: boolean) => void;
+  triggerTrajectory: () => void;
   sendDriveCommand: (linear: number, angular: number) => void;
   resetSimulation: () => void;
 }
@@ -55,16 +65,26 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // Control States
   const [controlMode, setControlModeState] = useState<ControlMode>('joint');
   const [isWorkspaceVisible, setIsWorkspaceVisible] = useState<boolean>(false);
+  const [isSmoothMode, setIsSmoothModeState] = useState<boolean>(true);
+
+  // Dynamics Telemetries
+  const [jointTorques, setJointTorques] = useState<number[]>([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+  const [manipulability, setManipulability] = useState<number>(1.0);
+  const [isTrajectoryActive, setIsTrajectoryActive] = useState<boolean>(false);
 
   // Task Space Targets
-  // Initial target values matched to default home coordinates:
-  // J1=0, J2=0, J3=0, J4=0, J5=0, J6=0 results in tip at: x=0, y=0.15 + 0.25 + 0.20 + 0.15 + 0.06 = 0.81, z=0
   const [targetX, setTargetX] = useState<number>(0.0);
   const [targetY, setTargetY] = useState<number>(0.81);
   const [targetZ, setTargetZ] = useState<number>(0.0);
   const [targetRoll, setTargetRoll] = useState<number>(0.0);
   const [targetPitch, setTargetPitch] = useState<number>(0.0);
   const [targetYaw, setTargetYaw] = useState<number>(0.0);
+
+  // Trajectory references
+  const startJointsRef = useRef<number[]>([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+  const targetJointsRef = useRef<number[]>([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+  const startTimeRef = useRef<number>(0);
+  const trajectoryDuration = 1.2; // seconds
 
   // Live Telemetry states
   const [lidarRange, setLidarRange] = useState<number>(2.0);
@@ -109,8 +129,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             if (payload.temperatureCelsius !== undefined) setTemperature(payload.temperatureCelsius);
             break;
           case 'joint_telemetry':
-            // Only accept remote joint states if we are NOT actively commanding via sliders locally
-            if (payload.jointAngles && controlMode === 'joint') {
+            if (payload.jointAngles && controlMode === 'joint' && !isTrajectoryActive) {
               setJointValues(payload.jointAngles);
             }
             break;
@@ -130,34 +149,82 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return () => {
       ws.close();
     };
-  }, [controlMode]);
+  }, [controlMode, isTrajectoryActive]);
 
-  // Calculate and apply Inverse Kinematics when Target changes in 'task' mode
+  // Dynamics Update Loop: calculates gravity torques and singular indices on Q adjustments
   useEffect(() => {
-    if (controlMode === 'task') {
-      const targetPos = new Vector3D(targetX, targetY, targetZ);
-      const targetRot = Matrix4x4.rotationY(targetYaw)
-        .multiply(Matrix4x4.rotationX(targetPitch))
-        .multiply(Matrix4x4.rotationZ(targetRoll));
+    const torques = DynamicsSolver.computeGravityTorques(jointValues);
+    setJointTorques(torques);
 
-      const solvedJoints = KinematicsSolver.solveIK(targetPos, targetRot);
-      if (solvedJoints) {
-        setJointValues(solvedJoints);
+    const measure = DynamicsSolver.calculateManipulability(jointValues);
+    setManipulability(measure);
+  }, [jointValues]);
 
-        // Transmit coordinates over sockets
+  // Smooth Interpolation Frame Loop
+  useEffect(() => {
+    if (!isTrajectoryActive) return;
+
+    let animFrameId: number;
+
+    const tick = (timestamp: number) => {
+      if (startTimeRef.current === 0) {
+        startTimeRef.current = timestamp;
+      }
+
+      const elapsed = (timestamp - startTimeRef.current) / 1000; // in seconds
+
+      if (elapsed >= trajectoryDuration) {
+        // Complete trajectory, snap to target configurations
+        setJointValues(targetJointsRef.current);
+        setIsTrajectoryActive(false);
+        startTimeRef.current = 0;
+
         if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
           socketRef.current.send(JSON.stringify({
             type: 'set_joint_angles',
-            jointAngles: solvedJoints,
+            jointAngles: targetJointsRef.current,
             timestamp: Date.now()
           }));
         }
+      } else {
+        // Compute interpolated position at current time step
+        const path = TrajectoryPlanner.interpolateJoints(
+          startJointsRef.current,
+          targetJointsRef.current,
+          trajectoryDuration,
+          elapsed
+        );
+        setJointValues(path.positions);
+
+        if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+          socketRef.current.send(JSON.stringify({
+            type: 'set_joint_angles',
+            jointAngles: path.positions,
+            timestamp: Date.now()
+          }));
+        }
+
+        animFrameId = requestAnimationFrame(tick);
       }
-    }
-  }, [targetX, targetY, targetZ, targetRoll, targetPitch, targetYaw, controlMode]);
+    };
+
+    animFrameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animFrameId);
+  }, [isTrajectoryActive]);
+
+  // Trigger smooth quintic trajectory transition helper
+  const startTrajectory = useCallback((targetJoints: number[]) => {
+    startJointsRef.current = [...jointValues];
+    targetJointsRef.current = targetJoints;
+    startTimeRef.current = 0;
+    setIsTrajectoryActive(true);
+  }, [jointValues]);
 
   // Command updates: Single joint manual slide
   const setJointValue = useCallback((index: number, value: number) => {
+    // If a trajectory is active, we terminate it to allow user manual override
+    setIsTrajectoryActive(false);
+    
     setJointValues((prev) => {
       const updated = [...prev];
       updated[index] = value;
@@ -168,7 +235,6 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setTargetX(tipPos.x);
       setTargetY(tipPos.y);
       setTargetZ(tipPos.z);
-      // For orientations, we keep current slider targets in simple scenarios
 
       if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
         socketRef.current.send(JSON.stringify({
@@ -192,11 +258,24 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setTargetYaw(yawVal);
   }, []);
 
+  // Trigger trajectory manually using current targets
+  const triggerTrajectory = useCallback(() => {
+    const targetPos = new Vector3D(targetX, targetY, targetZ);
+    const targetRot = Matrix4x4.rotationY(targetYaw)
+      .multiply(Matrix4x4.rotationX(targetPitch))
+      .multiply(Matrix4x4.rotationZ(targetRoll));
+
+    const solvedJoints = KinematicsSolver.solveIK(targetPos, targetRot);
+    if (solvedJoints) {
+      startTrajectory(solvedJoints);
+    }
+  }, [targetX, targetY, targetZ, targetRoll, targetPitch, targetYaw, startTrajectory]);
+
   // Toggle Control mode (synchronize slider state)
   const setControlMode = useCallback((mode: ControlMode) => {
     setControlModeState(mode);
+    setIsTrajectoryActive(false); // Reset active movements
     if (mode === 'task') {
-      // Synchronize Target coordinates with active end-effector tip positions
       const poses = KinematicsSolver.solveFK(jointValues);
       const tipPos = poses[poses.length - 1].position;
       setTargetX(tipPos.x);
@@ -204,6 +283,11 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setTargetZ(tipPos.z);
     }
   }, [jointValues]);
+
+  // Set trajectory interpolation toggle
+  const setIsSmoothMode = useCallback((smooth: boolean) => {
+    setIsSmoothModeState(smooth);
+  }, []);
 
   // Transmit discrete base motor adjustments
   const sendDriveCommand = useCallback((linear: number, angular: number) => {
@@ -220,6 +304,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // Home robot arm
   const resetSimulation = useCallback(() => {
     const homeJoints = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    setIsTrajectoryActive(false);
     setJointValues(homeJoints);
     setControlModeState('joint');
     setTargetX(0.0);
@@ -251,6 +336,10 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         targetPitch,
         targetYaw,
         endEffectorPos,
+        jointTorques,
+        manipulability,
+        isTrajectoryActive,
+        isSmoothMode,
         lidarRange,
         batteryVoltage,
         temperature,
@@ -262,6 +351,8 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setTargetCartesian,
         setControlMode,
         setIsWorkspaceVisible,
+        setIsSmoothMode,
+        triggerTrajectory,
         sendDriveCommand,
         resetSimulation
       }}

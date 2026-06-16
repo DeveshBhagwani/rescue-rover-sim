@@ -1,11 +1,13 @@
 import React from 'react';
 import { useSimulation } from '../context/SimulationContext';
-import { Cpu, Battery, Wifi, Activity } from 'lucide-react';
+import { Cpu, Battery, Wifi, Activity, ShieldAlert } from 'lucide-react';
 
 export const TelemetryDashboard: React.FC = () => {
   const {
     jointValues,
     endEffectorPos,
+    jointTorques,
+    manipulability,
     lidarRange,
     batteryVoltage,
     temperature,
@@ -14,8 +16,29 @@ export const TelemetryDashboard: React.FC = () => {
     controlMode
   } = useSimulation();
 
+  // Determine singularity alert styling
+  // Manipulability measure: w. w > 0.1 is nominal, w between 0.02 and 0.1 is warning, w < 0.02 is singular limit
+  const getSingularityStatus = () => {
+    if (manipulability > 0.08) {
+      return { label: 'NOMINAL', style: 'bg-cyan-950/60 border-cyan-500/40 text-cyan-400' };
+    } else if (manipulability > 0.025) {
+      return { label: 'APPROACHING', style: 'bg-amber-950/60 border-amber-500/40 text-amber-400 animate-pulse' };
+    } else {
+      return { label: 'SINGULAR LIMIT', style: 'bg-red-950/60 border-red-500/40 text-red-400 animate-pulse font-bold' };
+    }
+  };
+
+  const singularity = getSingularityStatus();
+
+  // Loaded Joint Specifications: Joint Index, Label, Max Nominal Torque/Force limit
+  const loadedJoints = [
+    { index: 1, label: 'J2 Shoulder Torque', max: 50.0, unit: 'N·m' },
+    { index: 2, label: 'J3 Linear Slide Force', max: 40.0, unit: 'N' },
+    { index: 4, label: 'J5 Wrist Pitch Torque', max: 5.0, unit: 'N·m' }
+  ];
+
   return (
-    <div className="absolute top-4 right-4 w-80 glassmorphism rounded-xl border border-dark-border p-4 font-mono text-dark-text pointer-events-auto select-none shadow-2xl">
+    <div className="absolute top-4 right-4 w-80 glassmorphism rounded-xl border border-dark-border p-4 font-mono text-dark-text pointer-events-auto select-none shadow-2xl overflow-y-auto max-h-[92vh]">
       <div className="flex justify-between items-center mb-4 pb-2 border-b border-dark-border">
         <h3 className="text-sm font-bold tracking-wider text-cyan-400 flex items-center gap-1.5">
           <Activity className="w-4 h-4 text-cyan-500 animate-pulse" />
@@ -57,6 +80,26 @@ export const TelemetryDashboard: React.FC = () => {
         </span>
       </div>
 
+      {/* Singularity / Manipulability Index */}
+      <div className="bg-dark-bg/40 p-2.5 mb-3 rounded border border-dark-border/80 text-xs">
+        <div className="flex justify-between items-center mb-1">
+          <span className="text-slate-400">SINGULARITY INDEX:</span>
+          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${singularity.style}`}>
+            {singularity.label}
+          </span>
+        </div>
+        <div className="flex justify-between items-center mt-1.5 font-mono">
+          <span className="text-[10px] text-slate-500">Yoshikawa w:</span>
+          <span className="text-cyan-400 font-bold">{manipulability.toFixed(5)}</span>
+        </div>
+        {manipulability <= 0.025 && (
+          <div className="flex items-start gap-1.5 text-[10px] text-red-400 bg-red-950/20 border border-red-500/25 p-1.5 rounded mt-2">
+            <ShieldAlert className="w-4 h-4 shrink-0 text-red-500 animate-bounce" />
+            <span>Kinematic lock detected. Actuator speeds limited to prevent joint infinite velocity calculation error.</span>
+          </div>
+        )}
+      </div>
+
       {/* Active End-Effector Tip Coordinates via FK */}
       <div className="bg-dark-bg/60 p-2.5 mb-3 rounded border border-dark-border/80 font-mono text-xs">
         <div className="text-[10px] text-slate-400 mb-1.5 uppercase tracking-wider">
@@ -84,13 +127,45 @@ export const TelemetryDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* Dynamic Gravity Joint Loads */}
+      <div className="bg-dark-bg/60 p-2.5 mb-3 rounded border border-dark-border/80 text-xs">
+        <div className="text-[10px] text-slate-400 mb-2 uppercase tracking-wider">
+          Gravity Joint Loads
+        </div>
+        <div className="space-y-2">
+          {loadedJoints.map((joint) => {
+            const currentVal = jointTorques[joint.index] || 0.0;
+            const percent = Math.min(100, (currentVal / joint.max) * 100);
+            
+            return (
+              <div key={`load-${joint.index}`}>
+                <div className="flex justify-between text-[10px] text-slate-300 mb-0.5">
+                  <span>{joint.label}</span>
+                  <span className={percent > 85 ? 'text-cyber-danger font-bold' : 'text-slate-400'}>
+                    {currentVal.toFixed(1)} {joint.unit}
+                  </span>
+                </div>
+                <div className="w-full bg-dark-border h-1 rounded overflow-hidden">
+                  <div 
+                    className={`h-full transition-all duration-300 ${
+                      percent > 85 ? 'bg-cyber-danger' : percent > 50 ? 'bg-cyber-warning' : 'bg-cyber-success'
+                    }`}
+                    style={{ width: `${percent}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Diagnostics Readouts */}
-      <div className="space-y-3">
+      <div className="space-y-2">
         {/* Battery Health */}
         <div>
           <div className="flex justify-between text-xs mb-1">
             <span className="flex items-center gap-1 text-slate-300">
-              <Battery className="w-3.5 h-3.5" /> Voltage
+              <Battery className="w-3.5 h-3.5" /> Battery
             </span>
             <span className={batteryVoltage < 22 ? 'text-cyber-danger font-bold' : 'text-slate-100'}>
               {batteryVoltage.toFixed(1)} V
@@ -131,7 +206,7 @@ export const TelemetryDashboard: React.FC = () => {
         </div>
 
         {/* Joint Vectors Summary */}
-        <div className="border-t border-dark-border pt-2">
+        <div className="border-t border-dark-border pt-1.5">
           <div className="text-[10px] text-slate-400 mb-1">JOINT VECTOR (Q)</div>
           <div className="grid grid-cols-6 gap-1 text-[10px] bg-dark-bg/60 p-1.5 rounded border border-dark-border/60 text-center">
             {jointValues.map((val, idx) => (

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useSimulation } from '../context/SimulationContext';
 import JointSlider from './JointSlider';
-import { RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Sliders, Target, Eye, EyeOff } from 'lucide-react';
+import { RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Sliders, Target, Eye, EyeOff, Play, Zap } from 'lucide-react';
 
 export const ControlPanel: React.FC = () => {
   const { 
@@ -18,6 +18,10 @@ export const ControlPanel: React.FC = () => {
     setControlMode,
     isWorkspaceVisible,
     setIsWorkspaceVisible,
+    isSmoothMode,
+    setIsSmoothMode,
+    isTrajectoryActive,
+    triggerTrajectory,
     sendDriveCommand, 
     resetSimulation 
   } = useSimulation();
@@ -75,27 +79,41 @@ export const ControlPanel: React.FC = () => {
         </button>
       </div>
 
-      {/* Workspace Bounding Visualizer toggle */}
-      <button
-        onClick={() => setIsWorkspaceVisible(!isWorkspaceVisible)}
-        className={`w-full flex items-center justify-center gap-2 py-2 mb-4 rounded-lg border font-mono text-xs transition duration-200 ${
-          isWorkspaceVisible 
-            ? 'bg-cyan-550/20 border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10' 
-            : 'bg-dark-card border-dark-border text-slate-400 hover:border-slate-600 hover:text-slate-300'
-        }`}
-      >
-        {isWorkspaceVisible ? (
-          <>
-            <EyeOff className="w-4 h-4 text-cyan-400" />
-            HIDE WORKSPACE BOUNDS
-          </>
-        ) : (
-          <>
-            <Eye className="w-4 h-4 text-slate-400" />
-            SHOW WORKSPACE BOUNDS
-          </>
-        )}
-      </button>
+      {/* Toggles Panel */}
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        {/* Workspace Visualizer */}
+        <button
+          onClick={() => setIsWorkspaceVisible(!isWorkspaceVisible)}
+          className={`flex flex-col items-center justify-center py-2 px-1 rounded-lg border font-mono text-[10px] transition duration-200 ${
+            isWorkspaceVisible 
+              ? 'bg-cyan-950/40 border-cyan-500/40 text-cyan-400' 
+              : 'bg-dark-card border-dark-border text-slate-400 hover:border-slate-600'
+          }`}
+        >
+          {isWorkspaceVisible ? <EyeOff className="w-4 h-4 mb-1" /> : <Eye className="w-4 h-4 mb-1" />}
+          WORKSPACE BOUNDS
+        </button>
+
+        {/* Trajectory Interpolation Mode */}
+        <button
+          onClick={() => setIsSmoothMode(!isSmoothMode)}
+          className={`flex flex-col items-center justify-center py-2 px-1 rounded-lg border font-mono text-[10px] transition duration-200 ${
+            isSmoothMode 
+              ? 'bg-purple-950/40 border-purple-500/40 text-purple-400' 
+              : 'bg-dark-card border-dark-border text-slate-400 hover:border-slate-600'
+          }`}
+        >
+          {isSmoothMode ? <Zap className="w-4 h-4 mb-1" /> : <Play className="w-4 h-4 mb-1" />}
+          QUINTIC SMOOTHING
+        </button>
+      </div>
+
+      {/* Active Trajectory Overlay Indicator */}
+      {isTrajectoryActive && (
+        <div className="bg-purple-950/60 border border-purple-500/40 text-purple-300 font-mono text-xs text-center py-2 rounded-lg mb-4 animate-pulse font-bold tracking-wider">
+          PATH PLANNING ACTIVE...
+        </div>
+      )}
 
       {/* SECTION: Arm Actuation Controllers */}
       <div className="mb-6">
@@ -178,6 +196,20 @@ export const ControlPanel: React.FC = () => {
                 onChange={(val) => setTargetCartesian(targetX, targetY, targetZ, val, targetPitch, targetYaw)}
               />
             </div>
+
+            {/* Manually trigger trajectory button */}
+            <button
+              onClick={triggerTrajectory}
+              disabled={isTrajectoryActive}
+              className={`w-full py-2.5 rounded-lg border font-mono font-bold text-xs transition duration-200 mt-2 flex items-center justify-center gap-1.5 ${
+                isTrajectoryActive 
+                  ? 'bg-purple-950/40 border-purple-500/20 text-purple-500 cursor-not-allowed' 
+                  : 'bg-purple-500/20 border-purple-500/40 text-purple-300 hover:bg-purple-500/35 hover:border-purple-500'
+              }`}
+            >
+              <Zap className="w-4 h-4" />
+              PLAN & EXECUTE SPLINE
+            </button>
           </div>
         )}
       </div>

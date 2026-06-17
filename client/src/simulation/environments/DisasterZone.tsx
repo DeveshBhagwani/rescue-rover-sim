@@ -1,6 +1,7 @@
 import React from 'react';
 import GroundGrid from './GroundGrid';
 import Rubbles from './Rubbles';
+import ExtractionTarget from './ExtractionTarget';
 
 /**
  * DisasterZone aggregates all terrain features, lights, and obstacles
@@ -30,6 +31,9 @@ export const DisasterZone: React.FC = () => {
 
       {/* Obstacles / Rubble */}
       <Rubbles />
+
+      {/* Target Canister for extraction tasks */}
+      <ExtractionTarget />
     </group>
   );
 };

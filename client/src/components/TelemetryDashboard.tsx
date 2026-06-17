@@ -19,7 +19,14 @@ export const TelemetryDashboard: React.FC = () => {
     temperature,
     isRosConnected,
     isWsConnected,
-    controlMode
+    controlMode,
+    // Perception & Fusion additions
+    isEStopped,
+    armCollisionWarning,
+    fusedTargetPos,
+    rawCameraPos,
+    rawLidarPos,
+    graspingForce
   } = useSimulation();
 
   // Singularity status styling
@@ -76,6 +83,24 @@ export const TelemetryDashboard: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Flashing Proximity / Safety Alarms */}
+      {(isEStopped || armCollisionWarning) && (
+        <div className="space-y-1.5 mb-3 font-mono">
+          {isEStopped && (
+            <div className="bg-red-950/70 border border-red-500/80 text-red-400 px-3 py-1.5 rounded-lg text-[10px] font-bold animate-pulse flex items-center gap-1.5 uppercase leading-snug">
+              <ShieldAlert className="w-4 h-4 text-red-500 shrink-0 animate-bounce" />
+              <span>BASE COLLISION SHUTDOWN (E-STOP)</span>
+            </div>
+          )}
+          {armCollisionWarning && (
+            <div className="bg-amber-950/70 border border-amber-500/80 text-amber-400 px-3 py-1.5 rounded-lg text-[10px] font-bold animate-pulse flex items-center gap-1.5 uppercase leading-snug">
+              <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
+              <span>ARM COLLISION LIMIT WARNING (&lt;0.05m)</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* SECTION: Mobile Base Position HUD */}
       <div className="bg-dark-bg/60 p-2.5 mb-3 rounded border border-dark-border/85 text-xs">
@@ -178,6 +203,48 @@ export const TelemetryDashboard: React.FC = () => {
               {endEffectorPos.z.toFixed(3)}
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* SECTION: Perception & Sensor Fusion */}
+      <div className="bg-dark-bg/60 p-2.5 mb-3 rounded border border-dark-border/80 text-xs">
+        <div className="flex justify-between items-center text-[10px] text-slate-400 mb-2 uppercase tracking-wider">
+          <span>Target tracking (Kalman)</span>
+          <span className="text-emerald-400 font-bold text-[9px] tracking-wide animate-pulse">LOCKED</span>
+        </div>
+
+        {/* Fused coordinates */}
+        <div className="bg-dark-bg/85 p-2 rounded border border-dark-border/30 mb-2">
+          <div className="text-[8px] text-slate-500 font-bold mb-1 uppercase font-mono">Fused position estimate</div>
+          <div className="grid grid-cols-3 gap-1 text-[9px] text-center font-bold text-emerald-400 font-mono">
+            <div className="bg-emerald-950/20 px-1 py-0.5 rounded border border-emerald-500/20 truncate">X: {fusedTargetPos[0].toFixed(2)}</div>
+            <div className="bg-emerald-950/20 px-1 py-0.5 rounded border border-emerald-500/20 truncate">Y: {fusedTargetPos[1].toFixed(2)}</div>
+            <div className="bg-emerald-950/20 px-1 py-0.5 rounded border border-emerald-500/20 truncate">Z: {fusedTargetPos[2].toFixed(2)}</div>
+          </div>
+        </div>
+
+        {/* Raw Noisy Measurements comparison */}
+        <div className="grid grid-cols-2 gap-1.5 text-[8px] font-mono mb-2">
+          <div className="bg-dark-bg/85 p-1 rounded border border-dark-border/20 text-red-300">
+            <div className="text-[7px] text-slate-500 font-bold uppercase mb-0.5">Raw Cam (Angular)</div>
+            <div className="truncate">[{rawCameraPos[0].toFixed(2)}, {rawCameraPos[1].toFixed(2)}, {rawCameraPos[2].toFixed(2)}]</div>
+          </div>
+          <div className="bg-dark-bg/85 p-1 rounded border border-dark-border/20 text-blue-300">
+            <div className="text-[7px] text-slate-500 font-bold uppercase mb-0.5">Raw Lidar (Range)</div>
+            <div className="truncate">[{rawLidarPos[0].toFixed(2)}, {rawLidarPos[1].toFixed(2)}, {rawLidarPos[2].toFixed(2)}]</div>
+          </div>
+        </div>
+
+        {/* Grasp Force feedback */}
+        <div className="border-t border-dark-border/40 pt-2 flex justify-between items-center text-[10px]">
+          <span className="text-slate-400 uppercase">Grasping Force:</span>
+          {graspingForce > 0.1 ? (
+            <span className="text-cyan-400 font-bold animate-pulse font-mono">
+              {graspingForce.toFixed(1)} N
+            </span>
+          ) : (
+            <span className="text-slate-500 font-mono">0.0 N (OPEN)</span>
+          )}
         </div>
       </div>
 

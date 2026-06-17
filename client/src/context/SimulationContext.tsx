@@ -9,6 +9,8 @@ import type { GridPos } from '../math/PathPlanner';
 import { SlamEngine } from '../math/SlamEngine';
 import type { ObstacleData } from '../math/SlamEngine';
 import { PidController } from '../math/PidController';
+import CollisionDetector from '../math/CollisionDetector';
+import SensorFusion from '../math/SensorFusion';
 
 export type ControlMode = 'joint' | 'task';
 
@@ -64,6 +66,21 @@ interface SimulationContextType {
   controlMode: ControlMode;
   isWorkspaceVisible: boolean;
   
+  // Calibration & Offsets
+  jointOffsets: number[];
+  saveCalibrationOffsets: (offsets: number[]) => Promise<void>;
+
+  // Perception & Sensor Fusion
+  fusedTargetPos: [number, number, number];
+  rawCameraPos: [number, number, number];
+  rawLidarPos: [number, number, number];
+  isEStopped: boolean;
+  resetEStop: () => void;
+  armCollisionWarning: boolean;
+  isGrasping: boolean;
+  setIsGrasping: (val: boolean) => void;
+  graspingForce: number;
+
   // Action Handlers
   setJointValue: (index: number, value: number) => void;
   setTargetCartesian: (x: number, y: number, z: number, r?: number, p?: number, yawVal?: number) => void;
@@ -82,6 +99,21 @@ const SimulationContext = createContext<SimulationContextType | undefined>(undef
 export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Joint Space Configuration
   const [jointValues, setJointValues] = useState<number[]>([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]); // Home
+
+  // Calibration preset offsets
+  const [jointOffsets, setJointOffsets] = useState<number[]>([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+
+  // Perception / Sensor Fusion / Safety States
+  const [fusedTargetPos, setFusedTargetPos] = useState<[number, number, number]>([-1.0, 0.5, 1.0]);
+  const [rawCameraPos, setRawCameraPos] = useState<[number, number, number]>([-1.0, 0.5, 1.0]);
+  const [rawLidarPos, setRawLidarPos] = useState<[number, number, number]>([-1.0, 0.5, 1.0]);
+  const [isEStopped, setIsEStopped] = useState<boolean>(false);
+  const [armCollisionWarning, setArmCollisionWarning] = useState<boolean>(false);
+  const [isGrasping, setIsGrasping] = useState<boolean>(false);
+  const [graspingForce, setGraspingForce] = useState<number>(0.0);
+
+  // Sensor Fusion Kalman Filter Instantiation
+  const sensorFusion = useRef(new SensorFusion(new Vector3D(-1.0, 0.5, 1.0)));
   
   // Mobile chassis state
   const [roverPosition, setRoverPosition] = useState<[number, number, number]>([0, 0.12, 0]);
@@ -161,16 +193,17 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const socketRef = useRef<WebSocket | null>(null);
 
-  // Computes active tip coordinates via Forward Kinematics (FK) dynamically
+  // Computes active tip coordinates via Forward Kinematics (FK) dynamically, applying calibration offsets
   const endEffectorPos = useMemo(() => {
-    const poses = KinematicsSolver.solveFK(jointValues);
+    const calibrated = jointValues.map((val, idx) => val + (jointOffsets[idx] || 0));
+    const poses = KinematicsSolver.solveFK(calibrated);
     const tipPose = poses[poses.length - 1];
     return {
       x: tipPose.position.x,
       y: tipPose.position.y,
       z: tipPose.position.z
     };
-  }, [jointValues]);
+  }, [jointValues, jointOffsets]);
 
   // Set up WebSocket connections
   useEffect(() => {
@@ -276,7 +309,83 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return () => cancelAnimationFrame(animFrameId);
   }, [isTrajectoryActive]);
 
-  // Central Rover Sim Update Tick: Handles SLAM mapping and PID waypoints controls
+  // Load saved calibration presets on mount from Express/MongoDB
+  useEffect(() => {
+    fetch('/api/calibration/RescueRover_01')
+      .then((res) => {
+        if (!res.ok) throw new Error('Calibration preset unavailable');
+        return res.json();
+      })
+      .then((data) => {
+        if (data && data.jointOffsets) {
+          setJointOffsets(data.jointOffsets);
+          console.log('[Calibration] Loaded presets from DB:', data.jointOffsets);
+        }
+      })
+      .catch((err) => console.warn('[Calibration] Preset load bypassed, using defaults:', err.message));
+  }, []);
+
+  // Save calibration presets to Express/MongoDB backend API
+  const saveCalibrationOffsets = useCallback(async (offsets: number[]) => {
+    try {
+      const response = await fetch('/api/calibration', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          robotName: 'RescueRover_01',
+          jointOffsets: offsets,
+          wheelBaseWidth: 0.55,
+          wheelRadius: 0.12,
+          cameraOffset: {
+            position: { x: 0.1, y: 0.0, z: 0.4 },
+            rotation: { roll: 0.0, pitch: 0.0, yaw: 0.0 }
+          }
+        }),
+      });
+      if (!response.ok) throw new Error('Failed to post calibration data');
+      const data = await response.json();
+      if (data && data.jointOffsets) {
+        setJointOffsets(data.jointOffsets);
+        console.log('[Calibration] Presets saved to MongoDB successfully:', data.jointOffsets);
+      }
+    } catch (err) {
+      console.error('[Calibration] Error saving preset settings:', err);
+      throw err;
+    }
+  }, []);
+
+  // Gripper and end-effector proximity checks
+  useEffect(() => {
+    const h = roverHeading;
+    // Compute current end effector tip world coordinates (using calibrated joints)
+    const eeXWorld = roverPosition[0] + endEffectorPos.x * Math.cos(h) + endEffectorPos.z * Math.sin(h);
+    const eeYWorld = roverPosition[1] + endEffectorPos.y;
+    const eeZWorld = roverPosition[2] - endEffectorPos.x * Math.sin(h) + endEffectorPos.z * Math.cos(h);
+    const eeWorldPos = new Vector3D(eeXWorld, eeYWorld, eeZWorld);
+
+    // Check manipulator tip collision warning threshold (0.05m)
+    const isArmInColl = CollisionDetector.checkArmCollision(eeWorldPos, staticObstacles, 0.05);
+    setArmCollisionWarning(isArmInColl);
+
+    // Squeeze / Grasp contact force simulation based on target canister proximity
+    const targetWorld = new Vector3D(-1.5, 0.7, 1.5);
+    const dx = eeXWorld - targetWorld.x;
+    const dy = eeYWorld - targetWorld.y;
+    const dz = eeZWorld - targetWorld.z;
+    const distanceToTarget = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+    if (isGrasping && distanceToTarget < 0.08) {
+      // Linear spring contact model: F_grasp = K_spring * (0.08 - distance)
+      const force = 150.0 * (0.08 - distanceToTarget);
+      setGraspingForce(force);
+    } else {
+      setGraspingForce(0.0);
+    }
+  }, [endEffectorPos, roverPosition, roverHeading, isGrasping, staticObstacles]);
+
+  // Central Rover Sim Update Tick: Handles SLAM mapping, safety checks, and PID waypoints controls
   useEffect(() => {
     let animId: number;
     let lastTime = performance.now();
@@ -298,7 +407,49 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         );
       });
 
-      // 2. Run closed-loop navigation PID steering
+      // 2. Perform base proximity safety check to trigger E-stop
+      const baseColl = CollisionDetector.checkBaseCollision(
+        roverPosition[0],
+        roverPosition[2],
+        staticObstacles,
+        0.35,
+        0.25 // safety threshold = chassisRadius + safetyMargin = 0.6m
+      );
+
+      if (baseColl) {
+        setIsEStopped(true);
+        setIsAutonomousDriving(false);
+      }
+
+      // 3. Sensor Fusion updates: simulates raw noisy camera and lidar readings
+      const TRUE_TARGET_POS = new Vector3D(-1.5, 0.7, 1.5);
+      
+      // Camera measurement has higher angular noise: stdDev of 0.20m
+      const camNoiseVal = () => (Math.random() - 0.5) * 0.4;
+      const camMeas = new Vector3D(
+        TRUE_TARGET_POS.x + camNoiseVal(),
+        TRUE_TARGET_POS.y + camNoiseVal(),
+        TRUE_TARGET_POS.z + camNoiseVal()
+      );
+
+      // Lidar measurement has lower range noise: stdDev of 0.03m
+      const lidNoiseVal = () => (Math.random() - 0.5) * 0.06;
+      const lidMeas = new Vector3D(
+        TRUE_TARGET_POS.x + lidNoiseVal(),
+        TRUE_TARGET_POS.y + lidNoiseVal(),
+        TRUE_TARGET_POS.z + lidNoiseVal()
+      );
+
+      setRawCameraPos([camMeas.x, camMeas.y, camMeas.z]);
+      setRawLidarPos([lidMeas.x, lidMeas.y, lidMeas.z]);
+
+      sensorFusion.current.predict();
+      sensorFusion.current.update(camMeas, false); // Camera bearing update
+      const fused = sensorFusion.current.update(lidMeas, true); // Lidar distance update
+
+      setFusedTargetPos([fused.x, fused.y, fused.z]);
+
+      // 4. Run closed-loop navigation PID steering
       if (isAutonomousDriving && navigationPath && navigationPath.length > 0) {
         const targetNode = navigationPath[0]; // next waypoint node
         const targetWorld = SlamEngine.gridToWorld(targetNode.x, targetNode.y, slamResolution);
@@ -327,10 +478,13 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           while (headingError < -Math.PI) headingError += 2 * Math.PI;
 
           const omega = steerPID.current.calculate(headingError, dt);
-          // Speed calculation: slow down during sharp alignments
-          const v = Math.abs(headingError) > 0.4 
+          
+          // Speed calculation: slow down during sharp alignments, or force 0 if E-stopped
+          const targetSpeed = Math.abs(headingError) > 0.4 
             ? 0.05 
             : distPID.current.calculate(dist, dt);
+
+          const v = (isEStopped || baseColl) ? 0.0 : targetSpeed;
 
           // Update odometry coordinates
           const newHeading = roverHeading + omega * dt;
@@ -360,7 +514,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-  }, [isAutonomousDriving, navigationPath, roverPosition, roverHeading, staticObstacles]);
+  }, [isAutonomousDriving, navigationPath, roverPosition, roverHeading, staticObstacles, isEStopped]);
 
   // Set navigation destination, trigger A* routing calculations
   const setNavigationWaypoint = useCallback((x: number, z: number) => {
@@ -460,6 +614,12 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   // Transmit discrete base motor adjustments
   const sendDriveCommand = useCallback((linear: number, angular: number) => {
+    // If E-stopped, block forward/backward linear driving command
+    if (isEStopped && linear !== 0) {
+      console.warn('[Safety] Driving blocked under E-STOP. Clear obstacles or reset simulation.');
+      return;
+    }
+
     // Manually overriding disables autonomous drive steering
     setIsAutonomousDriving(false);
     setTargetWaypoint(null);
@@ -483,7 +643,13 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         timestamp: Date.now()
       }));
     }
-  }, [roverHeading]);
+  }, [roverHeading, isEStopped]);
+
+  // Method to manually release/reset E-stop condition
+  const resetEStop = useCallback(() => {
+    setIsEStopped(false);
+    console.log('[Safety] E-Stop manually cleared.');
+  }, []);
 
   // Home robot arm & resets rover positions
   const resetSimulation = useCallback(() => {
@@ -497,6 +663,13 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setTargetRoll(0.0);
     setTargetPitch(0.0);
     setTargetYaw(0.0);
+
+    // Reset safety, grasping and sensor fusion
+    setIsEStopped(false);
+    setIsGrasping(false);
+    setGraspingForce(0.0);
+    setArmCollisionWarning(false);
+    sensorFusion.current.reset(new Vector3D(-1.0, 0.5, 1.0));
 
     // Reset base navigation
     setRoverPosition([0, 0.12, 0]);
@@ -553,6 +726,17 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         isWsConnected,
         controlMode,
         isWorkspaceVisible,
+        jointOffsets,
+        saveCalibrationOffsets,
+        fusedTargetPos,
+        rawCameraPos,
+        rawLidarPos,
+        isEStopped,
+        resetEStop,
+        armCollisionWarning,
+        isGrasping,
+        setIsGrasping,
+        graspingForce,
         setJointValue,
         setTargetCartesian,
         setControlMode,

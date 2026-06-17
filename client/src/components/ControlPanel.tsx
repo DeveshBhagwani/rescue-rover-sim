@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSimulation } from '../context/SimulationContext';
 import JointSlider from './JointSlider';
-import { RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Sliders, Target, Eye, EyeOff, Play, Zap, Navigation } from 'lucide-react';
+import { RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Sliders, Target, Eye, EyeOff, Play, Zap, Navigation, Settings } from 'lucide-react';
 
 export const ControlPanel: React.FC = () => {
   const { 
@@ -30,8 +30,44 @@ export const ControlPanel: React.FC = () => {
     Kp_dist,
     setKpDist,
     sendDriveCommand, 
-    resetSimulation 
+    resetSimulation,
+    // Calibration & Perception additions
+    jointOffsets,
+    saveCalibrationOffsets,
+    isGrasping,
+    setIsGrasping,
+    isEStopped,
+    resetEStop
   } = useSimulation();
+
+  // Tab navigation inside control panel
+  const [activeTab, setActiveTab] = useState<'control' | 'calibration'>('control');
+  
+  // Local state for calibration sliders in degrees
+  const [localOffsets, setLocalOffsets] = useState<number[]>([0, 0, 0, 0, 0, 0]);
+
+  // Keep local offsets updated from context
+  useEffect(() => {
+    setLocalOffsets(jointOffsets.map(r => Number((r * 180 / Math.PI).toFixed(1))));
+  }, [jointOffsets, activeTab]);
+
+  const handleLocalOffsetChange = (idx: number, val: number) => {
+    setLocalOffsets(prev => {
+      const next = [...prev];
+      next[idx] = val;
+      return next;
+    });
+  };
+
+  const handleSaveCalibration = async () => {
+    const radOffsets = localOffsets.map(d => d * Math.PI / 180);
+    try {
+      await saveCalibrationOffsets(radOffsets);
+      alert('Presaved joint offsets written to MongoDB!');
+    } catch (e) {
+      alert('DB Connection Error. Presets fallback active.');
+    }
+  };
 
   // Joint Space specifications
   const jointSpecs = [
@@ -60,34 +96,130 @@ export const ControlPanel: React.FC = () => {
         </button>
       </div>
 
-      {/* Control Mode Toggle Tabs */}
-      <div className="flex bg-dark-bg/60 p-1 rounded-lg border border-dark-border mb-4 font-mono text-xs">
+      {/* Portal Tabs Selector */}
+      <div className="flex bg-dark-bg/85 p-1 rounded-lg border border-dark-border mb-4 font-mono text-[10px]">
         <button
-          onClick={() => setControlMode('joint')}
-          className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-md transition-all ${
-            controlMode === 'joint' 
-              ? 'bg-cyan-500/25 border border-cyan-500/50 text-cyan-300 font-bold' 
+          onClick={() => setActiveTab('control')}
+          className={`flex-1 py-1.5 px-2 rounded-md transition-all flex items-center justify-center gap-1.5 ${
+            activeTab === 'control'
+              ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
           <Sliders className="w-3.5 h-3.5" />
-          JOINT SPACE
+          ACTUATION
         </button>
         <button
-          onClick={() => setControlMode('task')}
-          className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-md transition-all ${
-            controlMode === 'task' 
-              ? 'bg-purple-500/25 border border-purple-500/50 text-purple-300 font-bold' 
+          onClick={() => setActiveTab('calibration')}
+          className={`flex-1 py-1.5 px-2 rounded-md transition-all flex items-center justify-center gap-1.5 ${
+            activeTab === 'calibration'
+              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Target className="w-3.5 h-3.5" />
-          TASK SPACE
+          <Settings className="w-3.5 h-3.5" />
+          CALIBRATION
         </button>
       </div>
 
-      {/* Toggles Panel */}
-      <div className="grid grid-cols-2 gap-2 mb-4">
+      {activeTab === 'calibration' ? (
+        /* CALIBRATION VIEW presets inputs */
+        <div className="flex-grow flex flex-col font-mono text-xs">
+          <div className="mb-4 bg-amber-950/20 border border-amber-500/30 p-3 rounded-lg leading-relaxed text-[11px] text-amber-200">
+            <h4 className="font-bold mb-1 flex items-center gap-1 text-[11px]">
+              <Settings className="w-4 h-4 text-amber-400 animate-spin" style={{ animationDuration: '6s' }} />
+              JOINT ZERO OFFSET PRESETS
+            </h4>
+            Systematic offsets corrected in real-time FK/IK math transforms. Adjust values below in degrees.
+          </div>
+
+          <div className="space-y-4 mb-6">
+            {localOffsets.map((offset, idx) => (
+              <div key={`offset-input-${idx}`} className="flex flex-col gap-1">
+                <div className="flex justify-between text-slate-400 text-[10px]">
+                  <span>JOINT {idx + 1} ZERO CORRECTION</span>
+                  <span className="text-amber-400 font-bold">{offset.toFixed(1)}°</span>
+                </div>
+                <input
+                  type="range"
+                  min="-30"
+                  max="30"
+                  step="0.5"
+                  value={offset}
+                  onChange={(e) => handleLocalOffsetChange(idx, parseFloat(e.target.value))}
+                  className="w-full accent-amber-500 bg-slate-800 rounded-lg cursor-pointer appearance-none h-1"
+                />
+              </div>
+            ))}
+          </div>
+
+          <button
+            onClick={handleSaveCalibration}
+            className="w-full py-2.5 rounded-lg bg-amber-600/20 hover:bg-amber-600/35 border border-amber-500 text-amber-300 hover:text-amber-200 font-bold transition duration-200 flex items-center justify-center gap-1.5 text-xs mb-4"
+          >
+            <Zap className="w-4 h-4 text-amber-400" />
+            SAVE PRESETS TO MONGO
+          </button>
+        </div>
+      ) : (
+        /* STANDARD OPERATION CONTROLS VIEW */
+        <>
+          {/* E-Stop Flash Alert Header */}
+          {isEStopped && (
+            <div className="bg-red-950/80 border border-red-500 text-red-200 p-2.5 rounded-lg text-center text-[10px] font-bold animate-pulse tracking-wide mb-3 flex flex-col gap-1">
+              <span>⚠️ SAFETY COMPROMISED: BASE E-STOP ACTIVE</span>
+              <button 
+                onClick={resetEStop} 
+                className="mt-1 bg-red-800 hover:bg-red-700 text-white rounded py-1 px-2 font-mono text-[9px] uppercase border border-red-500 active:scale-95 transition-all"
+              >
+                RELEASE E-STOP LATCH
+              </button>
+            </div>
+          )}
+
+          {/* Grasp Canister Actuation Button */}
+          <div className="mb-4">
+            <button
+              onClick={() => setIsGrasping(!isGrasping)}
+              className={`w-full py-2.5 rounded-lg border font-bold text-xs transition duration-200 flex items-center justify-center gap-1.5 ${
+                isGrasping 
+                  ? 'bg-cyan-500/25 border-cyan-500 text-cyan-300 hover:bg-cyan-500/35' 
+                  : 'bg-dark-card border-dark-border text-slate-400 hover:border-slate-600 hover:text-slate-200'
+              }`}
+            >
+              <Target className="w-4 h-4 text-cyan-400" />
+              {isGrasping ? 'CLAMP RETRACTED (GRASP)' : 'OPEN CLAW GRIPPER'}
+            </button>
+          </div>
+
+          {/* Control Mode Toggle Tabs */}
+          <div className="flex bg-dark-bg/60 p-1 rounded-lg border border-dark-border mb-4 font-mono text-xs">
+            <button
+              onClick={() => setControlMode('joint')}
+              className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-md transition-all ${
+                controlMode === 'joint' 
+                  ? 'bg-cyan-500/25 border border-cyan-500/50 text-cyan-300 font-bold' 
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              JOINT SPACE
+            </button>
+            <button
+              onClick={() => setControlMode('task')}
+              className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-md transition-all ${
+                controlMode === 'task' 
+                  ? 'bg-purple-500/25 border border-purple-500/50 text-purple-300 font-bold' 
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Target className="w-3.5 h-3.5" />
+              TASK SPACE
+            </button>
+          </div>
+
+          {/* Toggles Panel */}
+          <div className="grid grid-cols-2 gap-2 mb-4">
         {/* Workspace Visualizer */}
         <button
           onClick={() => setIsWorkspaceVisible(!isWorkspaceVisible)}
@@ -309,6 +441,8 @@ export const ControlPanel: React.FC = () => {
           <div />
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 };

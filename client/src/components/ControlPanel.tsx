@@ -1,7 +1,7 @@
 import React from 'react';
 import { useSimulation } from '../context/SimulationContext';
 import JointSlider from './JointSlider';
-import { RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Sliders, Target, Eye, EyeOff, Play, Zap } from 'lucide-react';
+import { RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Sliders, Target, Eye, EyeOff, Play, Zap, Navigation } from 'lucide-react';
 
 export const ControlPanel: React.FC = () => {
   const { 
@@ -22,6 +22,13 @@ export const ControlPanel: React.FC = () => {
     setIsSmoothMode,
     isTrajectoryActive,
     triggerTrajectory,
+    // Navigation states & gains
+    isAutonomousDriving,
+    setIsAutonomousDriving,
+    Kp_steer,
+    setKpSteer,
+    Kp_dist,
+    setKpDist,
     sendDriveCommand, 
     resetSimulation 
   } = useSimulation();
@@ -214,11 +221,53 @@ export const ControlPanel: React.FC = () => {
         )}
       </div>
 
+      {/* SECTION: PID Steering Tuner */}
+      <div className="mb-4 pt-4 border-t border-dark-border/60">
+        <h3 className="text-xs font-bold font-mono text-slate-400 uppercase tracking-widest mb-3 border-b border-dark-border pb-1">
+          PID Navigation Gains
+        </h3>
+        <div className="space-y-1">
+          <JointSlider
+            label="Kp Steering Alignment"
+            min={0.5}
+            max={3.0}
+            unit=""
+            step={0.1}
+            value={Kp_steer}
+            onChange={(val) => setKpSteer(val)}
+          />
+          <JointSlider
+            label="Kp Position Drive"
+            min={0.5}
+            max={2.5}
+            unit=""
+            step={0.1}
+            value={Kp_dist}
+            onChange={(val) => setKpDist(val)}
+          />
+        </div>
+      </div>
+
       {/* SECTION: Mobile Rover Driving */}
       <div className="mt-auto pt-4 border-t border-dark-border/60">
-        <h3 className="text-xs font-bold font-mono text-slate-400 uppercase tracking-widest mb-4 border-b border-dark-border pb-1">
+        <h3 className="text-xs font-bold font-mono text-slate-400 uppercase tracking-widest mb-3 border-b border-dark-border pb-1">
           Mobile Base Drive
         </h3>
+
+        {/* Autonomous drive abort status banner */}
+        {isAutonomousDriving ? (
+          <button
+            onClick={() => setIsAutonomousDriving(false)}
+            className="w-full flex items-center justify-center gap-1.5 py-2 mb-4 bg-red-950/40 border border-red-500/40 text-red-400 rounded-lg font-mono text-xs font-bold animate-pulse hover:bg-red-900/40"
+          >
+            <Navigation className="w-4 h-4 text-red-400 animate-spin" />
+            ABORT AUTONOMOUS DRIVE
+          </button>
+        ) : (
+          <div className="w-full text-center text-[9px] text-slate-500 font-mono mb-4">
+            Click ground map to drive autonomously
+          </div>
+        )}
 
         <div className="grid grid-cols-3 gap-2 w-full max-w-[200px] mx-auto mb-4">
           <div />

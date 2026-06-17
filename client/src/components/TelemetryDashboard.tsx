@@ -1,6 +1,6 @@
 import React from 'react';
 import { useSimulation } from '../context/SimulationContext';
-import { Cpu, Battery, Wifi, Activity, ShieldAlert } from 'lucide-react';
+import { Cpu, Battery, Wifi, Activity, ShieldAlert, Compass } from 'lucide-react';
 
 export const TelemetryDashboard: React.FC = () => {
   const {
@@ -8,6 +8,12 @@ export const TelemetryDashboard: React.FC = () => {
     endEffectorPos,
     jointTorques,
     manipulability,
+    // Base states
+    roverPosition,
+    roverHeading,
+    navigationPath,
+    targetWaypoint,
+    isAutonomousDriving,
     lidarRange,
     batteryVoltage,
     temperature,
@@ -16,8 +22,7 @@ export const TelemetryDashboard: React.FC = () => {
     controlMode
   } = useSimulation();
 
-  // Determine singularity alert styling
-  // Manipulability measure: w. w > 0.1 is nominal, w between 0.02 and 0.1 is warning, w < 0.02 is singular limit
+  // Singularity status styling
   const getSingularityStatus = () => {
     if (manipulability > 0.08) {
       return { label: 'NOMINAL', style: 'bg-cyan-950/60 border-cyan-500/40 text-cyan-400' };
@@ -30,12 +35,16 @@ export const TelemetryDashboard: React.FC = () => {
 
   const singularity = getSingularityStatus();
 
-  // Loaded Joint Specifications: Joint Index, Label, Max Nominal Torque/Force limit
+  // Loaded Joint Specifications
   const loadedJoints = [
     { index: 1, label: 'J2 Shoulder Torque', max: 50.0, unit: 'N·m' },
     { index: 2, label: 'J3 Linear Slide Force', max: 40.0, unit: 'N' },
     { index: 4, label: 'J5 Wrist Pitch Torque', max: 5.0, unit: 'N·m' }
   ];
+
+  // Heading conversion to degrees
+  const headingDeg = ((roverHeading * 180) / Math.PI) % 360;
+  const normalizedHeading = headingDeg < 0 ? headingDeg + 360 : headingDeg;
 
   return (
     <div className="absolute top-4 right-4 w-80 glassmorphism rounded-xl border border-dark-border p-4 font-mono text-dark-text pointer-events-auto select-none shadow-2xl overflow-y-auto max-h-[92vh]">
@@ -66,6 +75,51 @@ export const TelemetryDashboard: React.FC = () => {
             <div className="font-semibold">{isRosConnected ? 'ACTIVE' : 'STANDBY'}</div>
           </div>
         </div>
+      </div>
+
+      {/* SECTION: Mobile Base Position HUD */}
+      <div className="bg-dark-bg/60 p-2.5 mb-3 rounded border border-dark-border/85 text-xs">
+        <div className="flex justify-between items-center text-[10px] text-slate-400 mb-2 uppercase tracking-wider">
+          <span>Rover Coordinate Base</span>
+          <Compass className="w-3.5 h-3.5 text-cyan-500" />
+        </div>
+        
+        <div className="grid grid-cols-3 gap-2 text-center text-slate-200 mb-2">
+          <div className="bg-dark-bg/85 p-1 rounded border border-dark-border/30">
+            <div className="text-[8px] text-slate-500 font-bold">POS X</div>
+            <div className="font-bold text-cyan-400 font-mono text-xs">{roverPosition[0].toFixed(2)}m</div>
+          </div>
+          <div className="bg-dark-bg/85 p-1 rounded border border-dark-border/30">
+            <div className="text-[8px] text-slate-500 font-bold">POS Z</div>
+            <div className="font-bold text-cyan-400 font-mono text-xs">{roverPosition[2].toFixed(2)}m</div>
+          </div>
+          <div className="bg-dark-bg/85 p-1 rounded border border-dark-border/30">
+            <div className="text-[8px] text-slate-500 font-bold">HEADING</div>
+            <div className="font-bold text-cyan-400 font-mono text-xs">{normalizedHeading.toFixed(0)}°</div>
+          </div>
+        </div>
+
+        {/* Autonomous route display */}
+        {isAutonomousDriving && targetWaypoint ? (
+          <div className="border-t border-dark-border/40 pt-2 flex flex-col gap-1 text-[10px]">
+            <div className="flex justify-between text-purple-300 font-bold">
+              <span>WAYPOINT DRIVE:</span>
+              <span>ACTIVE</span>
+            </div>
+            <div className="flex justify-between text-slate-400">
+              <span>Goal Coord:</span>
+              <span>[{targetWaypoint.x.toFixed(1)}, {targetWaypoint.z.toFixed(1)}]</span>
+            </div>
+            <div className="flex justify-between text-slate-400">
+              <span>Remaining nodes:</span>
+              <span>{navigationPath ? navigationPath.length : 0}</span>
+            </div>
+          </div>
+        ) : (
+          <div className="text-center text-[9px] text-slate-500">
+            DRIVE STATUS: STANDBY
+          </div>
+        )}
       </div>
 
       {/* Control Mode HUD Indicator */}

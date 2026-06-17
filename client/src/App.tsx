@@ -3,6 +3,7 @@ import { SimulationProvider } from './context/SimulationContext';
 import ControlPanel from './components/ControlPanel';
 import SceneContainer from './simulation/SceneContainer';
 import TelemetryDashboard from './components/TelemetryDashboard';
+import MiniMap from './components/MiniMap';
 
 export const App: React.FC = () => {
   return (
@@ -20,12 +21,15 @@ export const App: React.FC = () => {
             </h1>
             <div className="flex items-center gap-2 mt-1">
               <span className="w-2 h-2 rounded-full bg-cyber-success animate-blink" />
-              <span className="text-[10px] text-slate-400">PHASE 1: ENVIRONMENT & WEBGL ACTIVE</span>
+              <span className="text-[10px] text-slate-400">PHASE 4: ROVER BASE SLAM & PATH AUTONOMY</span>
             </div>
           </div>
 
           {/* Interactive WebGL Scene */}
           <SceneContainer />
+
+          {/* Tactical 2D SLAM MiniMap HUD */}
+          <MiniMap />
 
           {/* Diagnostics Telemetry Overlay */}
           <TelemetryDashboard />

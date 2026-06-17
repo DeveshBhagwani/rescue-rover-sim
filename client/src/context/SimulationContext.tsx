@@ -4,14 +4,20 @@ import { Matrix4x4 } from '../math/Matrix4x4';
 import KinematicsSolver from '../math/KinematicsSolver';
 import DynamicsSolver from '../math/DynamicsSolver';
 import TrajectoryPlanner from '../math/TrajectoryPlanner';
+import { PathPlanner } from '../math/PathPlanner';
+import type { GridPos } from '../math/PathPlanner';
+import { SlamEngine } from '../math/SlamEngine';
+import type { ObstacleData } from '../math/SlamEngine';
+import { PidController } from '../math/PidController';
 
 export type ControlMode = 'joint' | 'task';
 
 interface SimulationContextType {
   // Poses & Values
   jointValues: number[]; // [J1_rad, J2_rad, J3_m, J4_rad, J5_rad, J6_rad]
-  roverPosition: [number, number, number];
-  roverRotation: [number, number, number];
+  roverPosition: [number, number, number]; // [x, y, z] in meters
+  roverRotation: [number, number, number]; // [roll, pitch, yaw] in radians
+  roverHeading: number; // yaw angle in radians
   
   // Target Cartesian States (Task Space)
   targetX: number;
@@ -25,10 +31,27 @@ interface SimulationContextType {
   endEffectorPos: { x: number; y: number; z: number };
   
   // Dynamics Telemetries
-  jointTorques: number[]; // holding loads in N*m
-  manipulability: number; // Yoshikawa index
+  jointTorques: number[];
+  manipulability: number;
   isTrajectoryActive: boolean;
   isSmoothMode: boolean;
+  
+  // Navigation & Mapping States
+  slamGrid: number[];
+  slamWidth: number;
+  slamHeight: number;
+  slamResolution: number;
+  navigationPath: GridPos[] | null;
+  targetWaypoint: { x: number; z: number } | null;
+  isAutonomousDriving: boolean;
+  
+  // PID Gains
+  Kp_steer: number;
+  Kd_steer: number;
+  Kp_dist: number;
+  setKpSteer: (val: number) => void;
+  setKdSteer: (val: number) => void;
+  setKpDist: (val: number) => void;
   
   // Telemetries & Health
   lidarRange: number;
@@ -48,6 +71,8 @@ interface SimulationContextType {
   setIsWorkspaceVisible: (visible: boolean) => void;
   setIsSmoothMode: (smooth: boolean) => void;
   triggerTrajectory: () => void;
+  setNavigationWaypoint: (x: number, z: number) => void;
+  setIsAutonomousDriving: (active: boolean) => void;
   sendDriveCommand: (linear: number, angular: number) => void;
   resetSimulation: () => void;
 }
@@ -59,8 +84,9 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [jointValues, setJointValues] = useState<number[]>([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]); // Home
   
   // Mobile chassis state
-  const [roverPosition] = useState<[number, number, number]>([0, 0.12, 0]);
-  const [roverRotation] = useState<[number, number, number]>([0, 0, 0]);
+  const [roverPosition, setRoverPosition] = useState<[number, number, number]>([0, 0.12, 0]);
+  const [roverHeading, setRoverHeading] = useState<number>(0.0); // Heading in radians
+  const roverRotation = useMemo((): [number, number, number] => [0, roverHeading, 0], [roverHeading]);
   
   // Control States
   const [controlMode, setControlModeState] = useState<ControlMode>('joint');
@@ -86,6 +112,46 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const startTimeRef = useRef<number>(0);
   const trajectoryDuration = 1.2; // seconds
 
+  // Navigation & Mapping Configurations
+  const slamWidth = 60;
+  const slamHeight = 60;
+  const slamResolution = 0.5;
+  const [slamGrid, setSlamGrid] = useState<number[]>(() => Array(3600).fill(-1)); // -1: Unexplored
+  const [navigationPath, setNavigationPath] = useState<GridPos[] | null>(null);
+  const [targetWaypoint, setTargetWaypoint] = useState<{ x: number; z: number } | null>(null);
+  const [isAutonomousDriving, setIsAutonomousDriving] = useState<boolean>(false);
+
+  // Dynamic PID Gain parameters
+  const [Kp_steer, setKpSteer] = useState<number>(1.8);
+  const [Kd_steer, setKdSteer] = useState<number>(0.2);
+  const [Kp_dist, setKpDist] = useState<number>(1.2);
+
+  // Static Rubble coordinate positions matching Rubbles.tsx exactly
+  const staticObstacles = useMemo((): ObstacleData[] => [
+    { x: -3, z: 3, radius: 0.9 },
+    { x: 3, z: -3, radius: 1.1 },
+    { x: -2, z: -4, radius: 0.7 },
+    { x: 4, z: 2, radius: 0.8 },
+    { x: 0, z: 5, radius: 1.3 },
+    { x: -5, z: 0, radius: 0.7 },
+    { x: 5, z: 5, radius: 0.8 },
+    { x: 1.5, z: 2.5, radius: 0.6 },
+    { x: -1.5, z: 1.5, radius: 0.6 }
+  ], []);
+
+  // PID Steer and Speed controller blocks
+  const steerPID = useRef(new PidController(1.8, 0.01, 0.2, -1.2, 1.2)); // steering velocity clamp
+  const distPID = useRef(new PidController(1.2, 0.0, 0.1, -0.6, 0.6)); // linear velocity clamp
+
+  // Dynamically update controller gains
+  useEffect(() => {
+    steerPID.current.setGains(Kp_steer, 0.01, Kd_steer);
+  }, [Kp_steer, Kd_steer]);
+
+  useEffect(() => {
+    distPID.current.setGains(Kp_dist, 0.0, 0.05);
+  }, [Kp_dist]);
+
   // Live Telemetry states
   const [lidarRange, setLidarRange] = useState<number>(2.0);
   const [batteryVoltage, setBatteryVoltage] = useState<number>(24.0);
@@ -98,7 +164,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // Computes active tip coordinates via Forward Kinematics (FK) dynamically
   const endEffectorPos = useMemo(() => {
     const poses = KinematicsSolver.solveFK(jointValues);
-    const tipPose = poses[poses.length - 1]; // End-effector tip is the final element
+    const tipPose = poses[poses.length - 1];
     return {
       x: tipPose.position.x,
       y: tipPose.position.y,
@@ -171,10 +237,9 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         startTimeRef.current = timestamp;
       }
 
-      const elapsed = (timestamp - startTimeRef.current) / 1000; // in seconds
+      const elapsed = (timestamp - startTimeRef.current) / 1000;
 
       if (elapsed >= trajectoryDuration) {
-        // Complete trajectory, snap to target configurations
         setJointValues(targetJointsRef.current);
         setIsTrajectoryActive(false);
         startTimeRef.current = 0;
@@ -187,7 +252,6 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           }));
         }
       } else {
-        // Compute interpolated position at current time step
         const path = TrajectoryPlanner.interpolateJoints(
           startJointsRef.current,
           targetJointsRef.current,
@@ -212,6 +276,114 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return () => cancelAnimationFrame(animFrameId);
   }, [isTrajectoryActive]);
 
+  // Central Rover Sim Update Tick: Handles SLAM mapping and PID waypoints controls
+  useEffect(() => {
+    let animId: number;
+    let lastTime = performance.now();
+
+    const loop = (timestamp: number) => {
+      const dt = (timestamp - lastTime) / 1000;
+      lastTime = timestamp;
+
+      // 1. Run SLAM ray-cast calculations
+      setSlamGrid((prevGrid) => {
+        return SlamEngine.updateSLAM(
+          prevGrid,
+          slamWidth,
+          slamHeight,
+          slamResolution,
+          roverPosition[0],
+          roverPosition[2],
+          staticObstacles
+        );
+      });
+
+      // 2. Run closed-loop navigation PID steering
+      if (isAutonomousDriving && navigationPath && navigationPath.length > 0) {
+        const targetNode = navigationPath[0]; // next waypoint node
+        const targetWorld = SlamEngine.gridToWorld(targetNode.x, targetNode.y, slamResolution);
+
+        const dx = targetWorld.x - roverPosition[0];
+        const dz = targetWorld.z - roverPosition[2];
+        const dist = Math.sqrt(dx * dx + dz * dz);
+
+        if (dist < 0.20) {
+          // Waypoint reached, pop and advance to next node
+          setNavigationPath((prevPath) => {
+            if (!prevPath || prevPath.length <= 1) {
+              setIsAutonomousDriving(false);
+              setTargetWaypoint(null);
+              return null;
+            }
+            return prevPath.slice(1);
+          });
+          steerPID.current.reset();
+          distPID.current.reset();
+        } else {
+          // Steer calculation: heading error normalized to [-pi, pi]
+          const targetHeading = Math.atan2(dx, dz);
+          let headingError = targetHeading - roverHeading;
+          while (headingError > Math.PI) headingError -= 2 * Math.PI;
+          while (headingError < -Math.PI) headingError += 2 * Math.PI;
+
+          const omega = steerPID.current.calculate(headingError, dt);
+          // Speed calculation: slow down during sharp alignments
+          const v = Math.abs(headingError) > 0.4 
+            ? 0.05 
+            : distPID.current.calculate(dist, dt);
+
+          // Update odometry coordinates
+          const newHeading = roverHeading + omega * dt;
+          const newX = roverPosition[0] + v * Math.sin(roverHeading) * dt;
+          const newZ = roverPosition[2] + v * Math.cos(roverHeading) * dt;
+
+          setRoverHeading(newHeading);
+          setRoverPosition([newX, 0.12, newZ]);
+
+          // Transmit telemetry
+          if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+            socketRef.current.send(JSON.stringify({
+              type: 'base_telemetry',
+              x: newX,
+              z: newZ,
+              heading: newHeading,
+              linearVelocity: v,
+              angularVelocity: omega,
+              timestamp: Date.now()
+            }));
+          }
+        }
+      }
+
+      animId = requestAnimationFrame(loop);
+    };
+
+    animId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(animId);
+  }, [isAutonomousDriving, navigationPath, roverPosition, roverHeading, staticObstacles]);
+
+  // Set navigation destination, trigger A* routing calculations
+  const setNavigationWaypoint = useCallback((x: number, z: number) => {
+    setTargetWaypoint({ x, z });
+
+    // Identify start/end coordinates in the grid map
+    const startGrid = SlamEngine.worldToGrid(roverPosition[0], roverPosition[2], slamWidth, slamHeight, slamResolution);
+    const goalGrid = SlamEngine.worldToGrid(x, z, slamWidth, slamHeight, slamResolution);
+
+    // Compute route using A* search on the live SLAM occupancy map
+    const path = PathPlanner.solveAStar(slamGrid, slamWidth, slamHeight, startGrid, goalGrid);
+    if (path) {
+      setNavigationPath(path);
+      setIsAutonomousDriving(true); // Initiate self-drive instantly
+      steerPID.current.reset();
+      distPID.current.reset();
+    } else {
+      console.warn('[Navigation] Route blocked or unreachable.');
+      setNavigationPath(null);
+      setIsAutonomousDriving(false);
+    }
+  }, [roverPosition, slamGrid]);
+
   // Trigger smooth quintic trajectory transition helper
   const startTrajectory = useCallback((targetJoints: number[]) => {
     startJointsRef.current = [...jointValues];
@@ -222,14 +394,11 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   // Command updates: Single joint manual slide
   const setJointValue = useCallback((index: number, value: number) => {
-    // If a trajectory is active, we terminate it to allow user manual override
     setIsTrajectoryActive(false);
-    
     setJointValues((prev) => {
       const updated = [...prev];
       updated[index] = value;
       
-      // Update target coordinate positions to match FK result so switching modes is seamless
       const poses = KinematicsSolver.solveFK(updated);
       const tipPos = poses[poses.length - 1].position;
       setTargetX(tipPos.x);
@@ -271,10 +440,10 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   }, [targetX, targetY, targetZ, targetRoll, targetPitch, targetYaw, startTrajectory]);
 
-  // Toggle Control mode (synchronize slider state)
+  // Toggle Control mode
   const setControlMode = useCallback((mode: ControlMode) => {
     setControlModeState(mode);
-    setIsTrajectoryActive(false); // Reset active movements
+    setIsTrajectoryActive(false);
     if (mode === 'task') {
       const poses = KinematicsSolver.solveFK(jointValues);
       const tipPos = poses[poses.length - 1].position;
@@ -291,6 +460,21 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   // Transmit discrete base motor adjustments
   const sendDriveCommand = useCallback((linear: number, angular: number) => {
+    // Manually overriding disables autonomous drive steering
+    setIsAutonomousDriving(false);
+    setTargetWaypoint(null);
+    setNavigationPath(null);
+
+    // Integrates velocity command into pose directly for local keyboard control
+    const dt = 0.1; // 100ms approximation
+    setRoverPosition((prev) => {
+      const heading = roverHeading;
+      const newX = prev[0] + linear * Math.sin(heading) * dt;
+      const newZ = prev[2] + linear * Math.cos(heading) * dt;
+      return [newX, prev[1], newZ];
+    });
+    setRoverHeading((prev) => prev + angular * dt);
+
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({
         type: 'drive_command',
@@ -299,9 +483,9 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         timestamp: Date.now()
       }));
     }
-  }, []);
+  }, [roverHeading]);
 
-  // Home robot arm
+  // Home robot arm & resets rover positions
   const resetSimulation = useCallback(() => {
     const homeJoints = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
     setIsTrajectoryActive(false);
@@ -313,6 +497,14 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setTargetRoll(0.0);
     setTargetPitch(0.0);
     setTargetYaw(0.0);
+
+    // Reset base navigation
+    setRoverPosition([0, 0.12, 0]);
+    setRoverHeading(0.0);
+    setNavigationPath(null);
+    setTargetWaypoint(null);
+    setIsAutonomousDriving(false);
+    setSlamGrid(Array(3600).fill(-1)); // Clear SLAM map
 
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({
@@ -329,6 +521,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         jointValues,
         roverPosition,
         roverRotation,
+        roverHeading,
         targetX,
         targetY,
         targetZ,
@@ -340,6 +533,19 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         manipulability,
         isTrajectoryActive,
         isSmoothMode,
+        slamGrid,
+        slamWidth,
+        slamHeight,
+        slamResolution,
+        navigationPath,
+        targetWaypoint,
+        isAutonomousDriving,
+        Kp_steer,
+        Kd_steer,
+        Kp_dist,
+        setKpSteer,
+        setKdSteer,
+        setKpDist,
         lidarRange,
         batteryVoltage,
         temperature,
@@ -353,6 +559,8 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setIsWorkspaceVisible,
         setIsSmoothMode,
         triggerTrajectory,
+        setNavigationWaypoint,
+        setIsAutonomousDriving,
         sendDriveCommand,
         resetSimulation
       }}

@@ -92,6 +92,17 @@ interface SimulationContextType {
   setIsAutonomousDriving: (active: boolean) => void;
   sendDriveCommand: (linear: number, angular: number) => void;
   resetSimulation: () => void;
+
+  // Replay Mission Analytics
+  isReplayMode: boolean;
+  replayFrames: any[];
+  replayIndex: number;
+  replayMissionId: string;
+  setReplayMode: (active: boolean) => void;
+  loadReplaySession: (missionId: string) => Promise<void>;
+  setReplayIndex: (index: number) => void;
+  startNewMission: () => void;
+  currentMissionId: string;
 }
 
 const SimulationContext = createContext<SimulationContextType | undefined>(undefined);
@@ -102,6 +113,31 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   // Calibration preset offsets
   const [jointOffsets, setJointOffsets] = useState<number[]>([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+
+  // Replay Mission Analytics states
+  const [isReplayMode, setIsReplayModeState] = useState<boolean>(false);
+  const isReplayModeRef = useRef<boolean>(false);
+  const [replayFrames, setReplayFrames] = useState<any[]>([]);
+  const [replayIndex, setReplayIndexState] = useState<number>(0);
+  const [replayMissionId, setReplayMissionId] = useState<string>('');
+  const [currentMissionId, setCurrentMissionId] = useState<string>(`mission_${Date.now()}`);
+  const currentMissionIdRef = useRef<string>(currentMissionId);
+
+  // Backup states to restore after leaving replay mode
+  const backupStates = useRef<{
+    jointValues: number[];
+    roverPosition: [number, number, number];
+    roverHeading: number;
+    lidarRange: number;
+    batteryVoltage: number;
+    temperature: number;
+    jointTorques: number[];
+    manipulability: number;
+  } | null>(null);
+
+  useEffect(() => {
+    currentMissionIdRef.current = currentMissionId;
+  }, [currentMissionId]);
 
   // Perception / Sensor Fusion / Safety States
   const [fusedTargetPos, setFusedTargetPos] = useState<[number, number, number]>([-1.0, 0.5, 1.0]);
@@ -191,6 +227,129 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [isRosConnected, setIsRosConnected] = useState<boolean>(false);
   const [isWsConnected, setIsWsConnected] = useState<boolean>(false);
 
+  // Replay Mission Analytics action handlers
+  const setReplayMode = useCallback((active: boolean) => {
+    setIsReplayModeState(active);
+    isReplayModeRef.current = active;
+    
+    if (active) {
+      // Pause autonomous driving
+      setIsAutonomousDriving(false);
+      
+      // Backup current live states
+      backupStates.current = {
+        jointValues: [...jointValues],
+        roverPosition: [...roverPosition],
+        roverHeading,
+        lidarRange,
+        batteryVoltage,
+        temperature,
+        jointTorques: [...jointTorques],
+        manipulability
+      };
+    } else {
+      // Restore live states
+      if (backupStates.current) {
+        setJointValues(backupStates.current.jointValues);
+        setRoverPosition(backupStates.current.roverPosition);
+        setRoverHeading(backupStates.current.roverHeading);
+        setLidarRange(backupStates.current.lidarRange);
+        setBatteryVoltage(backupStates.current.batteryVoltage);
+        setTemperature(backupStates.current.temperature);
+        setJointTorques(backupStates.current.jointTorques);
+        setManipulability(backupStates.current.manipulability);
+      }
+      setReplayFrames([]);
+      setReplayIndexState(0);
+      setReplayMissionId('');
+    }
+  }, [jointValues, roverPosition, roverHeading, lidarRange, batteryVoltage, temperature, jointTorques, manipulability]);
+
+  const loadReplaySession = useCallback(async (missionId: string) => {
+    try {
+      const response = await fetch(`/api/replay/session/${missionId}`);
+      if (!response.ok) throw new Error('Failed to load session');
+      const data = await response.json();
+      if (data && data.length > 0) {
+        setReplayFrames(data);
+        setReplayMissionId(missionId);
+        setReplayIndexState(0);
+        // Load the first frame immediately
+        const frame = data[0];
+        setJointValues(frame.jointValues);
+        setRoverPosition([frame.odometry.x, frame.odometry.y, frame.odometry.z]);
+        setRoverHeading(frame.odometry.heading);
+        if (frame.jointTorques) setJointTorques(frame.jointTorques);
+        if (frame.manipulability !== undefined) setManipulability(frame.manipulability);
+        if (frame.battery !== undefined) setBatteryVoltage(frame.battery);
+        if (frame.temp !== undefined) setTemperature(frame.temp);
+        if (frame.lidar !== undefined) setLidarRange(frame.lidar);
+      }
+    } catch (error) {
+      console.error('[Replay] Error loading session:', error);
+      alert('Error loading historical mission session.');
+    }
+  }, []);
+
+  const setReplayIndex = useCallback((idx: number) => {
+    if (idx < 0 || idx >= replayFrames.length) return;
+    setReplayIndexState(idx);
+    
+    const frame = replayFrames[idx];
+    setJointValues(frame.jointValues);
+    setRoverPosition([frame.odometry.x, frame.odometry.y, frame.odometry.z]);
+    setRoverHeading(frame.odometry.heading);
+    if (frame.jointTorques) setJointTorques(frame.jointTorques);
+    if (frame.manipulability !== undefined) setManipulability(frame.manipulability);
+    if (frame.battery !== undefined) setBatteryVoltage(frame.battery);
+    if (frame.temp !== undefined) setTemperature(frame.temp);
+    if (frame.lidar !== undefined) setLidarRange(frame.lidar);
+  }, [replayFrames]);
+
+  const startNewMission = useCallback(() => {
+    const newId = `mission_${Date.now()}`;
+    setCurrentMissionId(newId);
+    currentMissionIdRef.current = newId;
+    console.log('[Mission] Started new telemetry recording mission session:', newId);
+  }, []);
+
+  // Periodic high-frequency telemetry logging over WebSockets
+  useEffect(() => {
+    const logInterval = setInterval(() => {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN && !isReplayModeRef.current) {
+        // Collect PID tracking errors
+        const steerErr = isAutonomousDriving ? steerPID.current.getLastError() : 0.0;
+        const distErr = isAutonomousDriving ? distPID.current.getLastError() : 0.0;
+
+        const payload = {
+          type: 'simulation_telemetry',
+          missionId: currentMissionIdRef.current,
+          jointValues,
+          jointTorques,
+          pidErrors: {
+            steer: steerErr,
+            distance: distErr
+          },
+          odometry: {
+            x: roverPosition[0],
+            y: roverPosition[1],
+            z: roverPosition[2],
+            heading: roverHeading
+          },
+          manipulability,
+          battery: batteryVoltage,
+          temp: temperature,
+          lidar: lidarRange,
+          timestamp: Date.now()
+        };
+
+        socketRef.current.send(JSON.stringify(payload));
+      }
+    }, 200); // 5Hz high-frequency logging rate
+
+    return () => clearInterval(logInterval);
+  }, [jointValues, jointTorques, roverPosition, roverHeading, manipulability, batteryVoltage, temperature, lidarRange, isAutonomousDriving]);
+
   const socketRef = useRef<WebSocket | null>(null);
 
   // Computes active tip coordinates via Forward Kinematics (FK) dynamically, applying calibration offsets
@@ -223,11 +382,13 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             setIsRosConnected(payload.status === 'connected');
             break;
           case 'sensor_telemetry':
+            if (isReplayModeRef.current) break;
             if (payload.lidarRange !== undefined) setLidarRange(payload.lidarRange);
             if (payload.batteryVoltage !== undefined) setBatteryVoltage(payload.batteryVoltage);
             if (payload.temperatureCelsius !== undefined) setTemperature(payload.temperatureCelsius);
             break;
           case 'joint_telemetry':
+            if (isReplayModeRef.current) break;
             if (payload.jointAngles && controlMode === 'joint' && !isTrajectoryActive) {
               setJointValues(payload.jointAngles);
             }
@@ -746,7 +907,16 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setNavigationWaypoint,
         setIsAutonomousDriving,
         sendDriveCommand,
-        resetSimulation
+        resetSimulation,
+        isReplayMode,
+        replayFrames,
+        replayIndex,
+        replayMissionId,
+        setReplayMode,
+        loadReplaySession,
+        setReplayIndex,
+        startNewMission,
+        currentMissionId
       }}
     >
       {children}

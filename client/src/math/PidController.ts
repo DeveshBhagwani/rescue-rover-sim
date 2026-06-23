@@ -70,5 +70,11 @@ export class PidController {
     this.ki = ki;
     this.kd = kd;
   }
+  /**
+   * Get the last calculated error.
+   */
+  public getLastError(): number {
+    return this.prevError;
+  }
 }
 export default PidController;

@@ -1,4 +1,5 @@
 import { WebSocketServer } from 'ws';
+import TelemetryModel from '../models/Telemetry.js';
 
 /**
  * setupTelemetryWebSocket sets up a WebSocket server that acts as a message broker between
@@ -33,9 +34,38 @@ export function setupTelemetryWebSocket(server) {
       message: 'Telemetry Gateway Connected. Real-time channel active.'
     }));
 
-    ws.on('message', (message) => {
+    ws.on('message', async (message) => {
       try {
         const payload = JSON.parse(message);
+
+        // Log high-frequency simulation telemetry to MongoDB Time Series database
+        if (payload.type === 'simulation_telemetry') {
+          try {
+            const entry = new TelemetryModel({
+              timestamp: new Date(payload.timestamp || Date.now()),
+              metadata: {
+                robotName: 'RescueRover_01',
+                missionId: payload.missionId || 'mission_default'
+              },
+              jointValues: payload.jointValues || [0,0,0,0,0,0],
+              jointTorques: payload.jointTorques || [0,0,0,0,0,0],
+              pidErrors: payload.pidErrors || { steer: 0, distance: 0 },
+              odometry: payload.odometry || { x: 0, y: 0.12, z: 0, heading: 0 },
+              manipulability: payload.manipulability || 0.0,
+              battery: payload.battery || 24.0,
+              temp: payload.temp || 37.0,
+              lidar: payload.lidar || 0.0
+            });
+            await entry.save();
+          } catch (dbErr) {
+            // Silence DB logging failures if DB is run in-memory fallback
+            console.debug('[Telemetry Database Log] Bypass: ', dbErr.message);
+          }
+
+          // Broadcast to any active monitoring client dashboard
+          broadcastToClients(payload, ws);
+          return;
+        }
 
         // Identify if connection is the ROS2 node bridging server
         if (payload.type === 'register_ros_bridge') {

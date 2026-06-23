@@ -4,6 +4,7 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import mapsRouter from './routes/maps.js';
 import calibrationRouter from './routes/calibration.js';
+import replayRouter from './routes/replay.js';
 import { setupTelemetryWebSocket } from './sockets/telemetryHandler.js';
 
 const PORT = process.env.PORT || 5000;
@@ -19,6 +20,7 @@ app.use(express.json());
 // Mount API Routes
 app.use('/api/maps', mapsRouter);
 app.use('/api/calibration', calibrationRouter);
+app.use('/api/replay', replayRouter);
 
 // Health Check Endpoint
 app.get('/health', (req, res) => {

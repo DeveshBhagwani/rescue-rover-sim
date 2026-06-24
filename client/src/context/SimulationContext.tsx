@@ -54,6 +54,20 @@ interface SimulationContextType {
   setActiveObstacles: React.Dispatch<React.SetStateAction<ObstacleData[]>>;
   defaultObstacles: ObstacleData[];
 
+  // Chaos Mode Fault Injection
+  chaosSensorNoise: boolean;
+  setChaosSensorNoise: (val: boolean) => void;
+  chaosPacketLoss: boolean;
+  setChaosPacketLoss: (val: boolean) => void;
+  chaosActuatorFreeze: boolean;
+  setChaosActuatorFreeze: (val: boolean) => void;
+  chaosFrozenJointIndex: number;
+  setChaosFrozenJointIndex: (val: number) => void;
+  chaosFrozenJointAngle: number;
+  setChaosFrozenJointAngle: (val: number) => void;
+  chaosBatteryDrop: boolean;
+  setChaosBatteryDrop: (val: boolean) => void;
+
   // PID Gains
   Kp_steer: number;
   Kd_steer: number;
@@ -215,6 +229,14 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   }, []);
 
+  // Chaos Mode States
+  const [chaosSensorNoise, setChaosSensorNoise] = useState<boolean>(false);
+  const [chaosPacketLoss, setChaosPacketLoss] = useState<boolean>(false);
+  const [chaosActuatorFreeze, setChaosActuatorFreeze] = useState<boolean>(false);
+  const [chaosFrozenJointIndex, setChaosFrozenJointIndex] = useState<number>(1);
+  const [chaosFrozenJointAngle, setChaosFrozenJointAngle] = useState<number>(0.3);
+  const [chaosBatteryDrop, setChaosBatteryDrop] = useState<boolean>(false);
+
   // Static Rubble coordinate positions matching Rubbles.tsx exactly
   const defaultObstacles = useMemo((): ObstacleData[] => [
     { x: -3, z: 3, radius: 0.9 },
@@ -340,6 +362,10 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   useEffect(() => {
     const logInterval = setInterval(() => {
       if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN && !isReplayModeRef.current) {
+        // Drop outgoing telemetry packet to mock packet loss
+        if (chaosPacketLoss && Math.random() < 0.35) {
+          return;
+        }
         // Collect PID tracking errors
         const steerErr = isAutonomousDriving ? steerPID.current.getLastError() : 0.0;
         const distErr = isAutonomousDriving ? distPID.current.getLastError() : 0.0;
@@ -398,6 +424,10 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
 
     ws.onmessage = (event) => {
+      // Drop incoming telemetry packet to mock packet loss
+      if (chaosPacketLoss && Math.random() < 0.35) {
+        return;
+      }
       try {
         const payload = JSON.parse(event.data);
         switch (payload.type) {
@@ -432,7 +462,20 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return () => {
       ws.close();
     };
-  }, [controlMode, isTrajectoryActive]);
+  }, [controlMode, isTrajectoryActive, chaosPacketLoss]);
+
+  // Sync chaos states to backend and ROS2 node bridge
+  useEffect(() => {
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({
+        type: 'chaos_config',
+        sensor_noise: chaosSensorNoise,
+        packet_loss: chaosPacketLoss,
+        actuator_freeze: chaosActuatorFreeze,
+        timestamp: Date.now()
+      }));
+    }
+  }, [chaosSensorNoise, chaosPacketLoss, chaosActuatorFreeze]);
 
   // Dynamics Update Loop: calculates gravity torques and singular indices on Q adjustments
   useEffect(() => {
@@ -457,14 +500,18 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const elapsed = (timestamp - startTimeRef.current) / 1000;
 
       if (elapsed >= trajectoryDuration) {
-        setJointValues(targetJointsRef.current);
+        let finalJoints = [...targetJointsRef.current];
+        if (chaosActuatorFreeze) {
+          finalJoints[chaosFrozenJointIndex] = chaosFrozenJointAngle;
+        }
+        setJointValues(finalJoints);
         setIsTrajectoryActive(false);
         startTimeRef.current = 0;
 
         if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
           socketRef.current.send(JSON.stringify({
             type: 'set_joint_angles',
-            jointAngles: targetJointsRef.current,
+            jointAngles: finalJoints,
             timestamp: Date.now()
           }));
         }
@@ -475,12 +522,16 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           trajectoryDuration,
           elapsed
         );
-        setJointValues(path.positions);
+        let pathJoints = [...path.positions];
+        if (chaosActuatorFreeze) {
+          pathJoints[chaosFrozenJointIndex] = chaosFrozenJointAngle;
+        }
+        setJointValues(pathJoints);
 
         if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
           socketRef.current.send(JSON.stringify({
             type: 'set_joint_angles',
-            jointAngles: path.positions,
+            jointAngles: pathJoints,
             timestamp: Date.now()
           }));
         }
@@ -578,6 +629,11 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const dt = (timestamp - lastTime) / 1000;
       lastTime = timestamp;
 
+      // Drain battery dynamically if battery fault is active
+      if (chaosBatteryDrop) {
+        setBatteryVoltage((prev) => Math.max(0, prev - dt * 0.45));
+      }
+
       // 1. Run SLAM ray-cast calculations
       setSlamGrid((prevGrid) => {
         return SlamEngine.updateSLAM(
@@ -668,12 +724,19 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             ? 0.05 
             : distPID.current.calculate(dist, dt);
 
-          const v = (isEStopped || baseColl) ? 0.0 : targetSpeed;
+          // Battery depletion triggers brownout safety shutdown or speed throttle
+          const isBatteryDepleted = batteryVoltage < 18.5;
+          const speedScale = isBatteryDepleted ? 0.35 : 1.0;
+          const v = (isEStopped || baseColl || batteryVoltage <= 15.0) ? 0.0 : targetSpeed * speedScale;
 
-          // Update odometry coordinates
-          const newHeading = roverHeading + omega * dt;
-          const newX = roverPosition[0] + v * Math.sin(roverHeading) * dt;
-          const newZ = roverPosition[2] + v * Math.cos(roverHeading) * dt;
+          // Update odometry coordinates, injecting drift noise if Sensor Noise is enabled
+          const headingJitter = chaosSensorNoise ? (Math.random() - 0.5) * 0.03 : 0.0;
+          const posJitterX = chaosSensorNoise ? (Math.random() - 0.5) * 0.06 : 0.0;
+          const posJitterZ = chaosSensorNoise ? (Math.random() - 0.5) * 0.06 : 0.0;
+
+          const newHeading = roverHeading + omega * dt + headingJitter;
+          const newX = roverPosition[0] + v * Math.sin(roverHeading) * dt + posJitterX;
+          const newZ = roverPosition[2] + v * Math.cos(roverHeading) * dt + posJitterZ;
 
           setRoverHeading(newHeading);
           setRoverPosition([newX, 0.12, newZ]);
@@ -698,7 +761,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-  }, [isAutonomousDriving, navigationPath, roverPosition, roverHeading, activeObstacles, isEStopped]);
+  }, [isAutonomousDriving, navigationPath, roverPosition, roverHeading, activeObstacles, isEStopped, chaosSensorNoise, chaosBatteryDrop, batteryVoltage]);
 
   // Set navigation destination, trigger chosen routing calculations
   const setNavigationWaypoint = useCallback((x: number, z: number) => {
@@ -736,7 +799,11 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setIsTrajectoryActive(false);
     setJointValues((prev) => {
       const updated = [...prev];
-      updated[index] = value;
+      if (chaosActuatorFreeze && index === chaosFrozenJointIndex) {
+        updated[index] = chaosFrozenJointAngle;
+      } else {
+        updated[index] = value;
+      }
       
       const poses = KinematicsSolver.solveFK(updated);
       const tipPos = poses[poses.length - 1].position;
@@ -754,7 +821,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
       return updated;
     });
-  }, []);
+  }, [chaosActuatorFreeze, chaosFrozenJointIndex, chaosFrozenJointAngle]);
 
   // Modify Target Cartesian points
   const setTargetCartesian = useCallback((x: number, y: number, z: number, r = 0, p = 0, yawVal = 0) => {
@@ -775,9 +842,12 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     const solvedJoints = KinematicsSolver.solveIK(targetPos, targetRot);
     if (solvedJoints) {
+      if (chaosActuatorFreeze) {
+        solvedJoints[chaosFrozenJointIndex] = chaosFrozenJointAngle;
+      }
       startTrajectory(solvedJoints);
     }
-  }, [targetX, targetY, targetZ, targetRoll, targetPitch, targetYaw, startTrajectory]);
+  }, [targetX, targetY, targetZ, targetRoll, targetPitch, targetYaw, startTrajectory, chaosActuatorFreeze, chaosFrozenJointIndex, chaosFrozenJointAngle]);
 
   // Toggle Control mode
   const setControlMode = useCallback((mode: ControlMode) => {
@@ -865,6 +935,13 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setSlamGrid(Array(3600).fill(-1)); // Clear SLAM map
     setActiveObstacles(defaultObstacles); // Reset obstacles
 
+    // Reset chaos modes
+    setChaosSensorNoise(false);
+    setChaosPacketLoss(false);
+    setChaosActuatorFreeze(false);
+    setChaosBatteryDrop(false);
+    setBatteryVoltage(24.0);
+
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({
         type: 'set_joint_angles',
@@ -946,7 +1023,19 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setPathfinderAlgorithm,
         activeObstacles,
         setActiveObstacles,
-        defaultObstacles
+        defaultObstacles,
+        chaosSensorNoise,
+        setChaosSensorNoise,
+        chaosPacketLoss,
+        setChaosPacketLoss,
+        chaosActuatorFreeze,
+        setChaosActuatorFreeze,
+        chaosFrozenJointIndex,
+        setChaosFrozenJointIndex,
+        chaosFrozenJointAngle,
+        setChaosFrozenJointAngle,
+        chaosBatteryDrop,
+        setChaosBatteryDrop
       }}
     >
       {children}

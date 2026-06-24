@@ -1,0 +1,1 @@
+# Swarm manager package initialization

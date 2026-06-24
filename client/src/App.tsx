@@ -5,6 +5,7 @@ import SceneContainer from './simulation/SceneContainer';
 import TelemetryDashboard from './components/TelemetryDashboard';
 import MiniMap from './components/MiniMap';
 import MissionScrubber from './components/analytics/MissionScrubber';
+import ChaosPanel from './components/chaos_panel/ChaosPanel';
 import TelemetryCharts from './components/analytics/TelemetryCharts';
 import { BarChart2, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -40,6 +41,9 @@ export const App: React.FC = () => {
 
             {/* Diagnostics Telemetry Overlay */}
             <TelemetryDashboard />
+
+            {/* Chaos Injection Panel Overlay */}
+            <ChaosPanel />
           </div>
 
           {/* Collapsible Mission Analytics Sliding Bottom Drawer */}

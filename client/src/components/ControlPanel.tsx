@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSimulation } from '../context/SimulationContext';
 import JointSlider from './JointSlider';
+import SandboxManager from './sandbox/SandboxManager';
 import { RotateCcw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Square, Sliders, Target, Eye, EyeOff, Play, Zap, Navigation, Settings } from 'lucide-react';
 
 export const ControlPanel: React.FC = () => {
@@ -41,7 +42,7 @@ export const ControlPanel: React.FC = () => {
   } = useSimulation();
 
   // Tab navigation inside control panel
-  const [activeTab, setActiveTab] = useState<'control' | 'calibration'>('control');
+  const [activeTab, setActiveTab] = useState<'control' | 'calibration' | 'sandbox'>('control');
   
   // Local state for calibration sliders in degrees
   const [localOffsets, setLocalOffsets] = useState<number[]>([0, 0, 0, 0, 0, 0]);
@@ -97,28 +98,39 @@ export const ControlPanel: React.FC = () => {
       </div>
 
       {/* Portal Tabs Selector */}
-      <div className="flex bg-dark-bg/85 p-1 rounded-lg border border-dark-border mb-4 font-mono text-[10px]">
+      <div className="flex bg-dark-bg/85 p-1 rounded-lg border border-dark-border mb-4 font-mono text-[9px] gap-0.5">
         <button
           onClick={() => setActiveTab('control')}
-          className={`flex-1 py-1.5 px-2 rounded-md transition-all flex items-center justify-center gap-1.5 ${
+          className={`flex-1 py-1.5 px-1 rounded-md transition-all flex items-center justify-center gap-1 ${
             activeTab === 'control'
               ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Sliders className="w-3.5 h-3.5" />
+          <Sliders className="w-3 h-3" />
           ACTUATION
         </button>
         <button
           onClick={() => setActiveTab('calibration')}
-          className={`flex-1 py-1.5 px-2 rounded-md transition-all flex items-center justify-center gap-1.5 ${
+          className={`flex-1 py-1.5 px-1 rounded-md transition-all flex items-center justify-center gap-1 ${
             activeTab === 'calibration'
               ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Settings className="w-3.5 h-3.5" />
+          <Settings className="w-3 h-3" />
           CALIBRATION
+        </button>
+        <button
+          onClick={() => setActiveTab('sandbox')}
+          className={`flex-1 py-1.5 px-1 rounded-md transition-all flex items-center justify-center gap-1 ${
+            activeTab === 'sandbox'
+              ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Navigation className="w-3 h-3" />
+          SANDBOX
         </button>
       </div>
 
@@ -160,6 +172,11 @@ export const ControlPanel: React.FC = () => {
             <Zap className="w-4 h-4 text-amber-400" />
             SAVE PRESETS TO MONGO
           </button>
+        </div>
+      ) : activeTab === 'sandbox' ? (
+        /* SANDBOX VIEW */
+        <div className="flex-grow flex flex-col font-mono text-xs overflow-y-auto">
+          <SandboxManager />
         </div>
       ) : (
         /* STANDARD OPERATION CONTROLS VIEW */

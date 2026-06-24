@@ -47,6 +47,13 @@ interface SimulationContextType {
   targetWaypoint: { x: number; z: number } | null;
   isAutonomousDriving: boolean;
   
+  // Pathfinder & Sandbox
+  pathfinderAlgorithm: string;
+  setPathfinderAlgorithm: (algo: string) => void;
+  activeObstacles: ObstacleData[];
+  setActiveObstacles: React.Dispatch<React.SetStateAction<ObstacleData[]>>;
+  defaultObstacles: ObstacleData[];
+
   // PID Gains
   Kp_steer: number;
   Kd_steer: number;
@@ -194,8 +201,22 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [Kd_steer, setKdSteer] = useState<number>(0.2);
   const [Kp_dist, setKpDist] = useState<number>(1.2);
 
+  // Pathfinder Sandbox Algorithm
+  const [pathfinderAlgorithm, setPathfinderAlgorithmState] = useState<string>('astar');
+  
+  const setPathfinderAlgorithm = useCallback((algo: string) => {
+    setPathfinderAlgorithmState(algo);
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({
+        type: 'set_algorithm',
+        algorithm: algo,
+        timestamp: Date.now()
+      }));
+    }
+  }, []);
+
   // Static Rubble coordinate positions matching Rubbles.tsx exactly
-  const staticObstacles = useMemo((): ObstacleData[] => [
+  const defaultObstacles = useMemo((): ObstacleData[] => [
     { x: -3, z: 3, radius: 0.9 },
     { x: 3, z: -3, radius: 1.1 },
     { x: -2, z: -4, radius: 0.7 },
@@ -206,6 +227,8 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     { x: 1.5, z: 2.5, radius: 0.6 },
     { x: -1.5, z: 1.5, radius: 0.6 }
   ], []);
+
+  const [activeObstacles, setActiveObstacles] = useState<ObstacleData[]>(defaultObstacles);
 
   // PID Steer and Speed controller blocks
   const steerPID = useRef(new PidController(1.8, 0.01, 0.2, -1.2, 1.2)); // steering velocity clamp
@@ -527,7 +550,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const eeWorldPos = new Vector3D(eeXWorld, eeYWorld, eeZWorld);
 
     // Check manipulator tip collision warning threshold (0.05m)
-    const isArmInColl = CollisionDetector.checkArmCollision(eeWorldPos, staticObstacles, 0.05);
+    const isArmInColl = CollisionDetector.checkArmCollision(eeWorldPos, activeObstacles, 0.05);
     setArmCollisionWarning(isArmInColl);
 
     // Squeeze / Grasp contact force simulation based on target canister proximity
@@ -544,7 +567,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     } else {
       setGraspingForce(0.0);
     }
-  }, [endEffectorPos, roverPosition, roverHeading, isGrasping, staticObstacles]);
+  }, [endEffectorPos, roverPosition, roverHeading, isGrasping, activeObstacles]);
 
   // Central Rover Sim Update Tick: Handles SLAM mapping, safety checks, and PID waypoints controls
   useEffect(() => {
@@ -564,7 +587,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           slamResolution,
           roverPosition[0],
           roverPosition[2],
-          staticObstacles
+          activeObstacles
         );
       });
 
@@ -572,7 +595,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const baseColl = CollisionDetector.checkBaseCollision(
         roverPosition[0],
         roverPosition[2],
-        staticObstacles,
+        activeObstacles,
         0.35,
         0.25 // safety threshold = chassisRadius + safetyMargin = 0.6m
       );
@@ -675,9 +698,9 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-  }, [isAutonomousDriving, navigationPath, roverPosition, roverHeading, staticObstacles, isEStopped]);
+  }, [isAutonomousDriving, navigationPath, roverPosition, roverHeading, activeObstacles, isEStopped]);
 
-  // Set navigation destination, trigger A* routing calculations
+  // Set navigation destination, trigger chosen routing calculations
   const setNavigationWaypoint = useCallback((x: number, z: number) => {
     setTargetWaypoint({ x, z });
 
@@ -685,8 +708,9 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const startGrid = SlamEngine.worldToGrid(roverPosition[0], roverPosition[2], slamWidth, slamHeight, slamResolution);
     const goalGrid = SlamEngine.worldToGrid(x, z, slamWidth, slamHeight, slamResolution);
 
-    // Compute route using A* search on the live SLAM occupancy map
-    const path = PathPlanner.solveAStar(slamGrid, slamWidth, slamHeight, startGrid, goalGrid);
+    // Compute route using chosen pathfinder search on the live SLAM occupancy map
+    const result = PathPlanner.planPath(pathfinderAlgorithm, slamGrid, slamWidth, slamHeight, startGrid, goalGrid);
+    const path = result.path;
     if (path) {
       setNavigationPath(path);
       setIsAutonomousDriving(true); // Initiate self-drive instantly
@@ -697,7 +721,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setNavigationPath(null);
       setIsAutonomousDriving(false);
     }
-  }, [roverPosition, slamGrid]);
+  }, [roverPosition, slamGrid, pathfinderAlgorithm]);
 
   // Trigger smooth quintic trajectory transition helper
   const startTrajectory = useCallback((targetJoints: number[]) => {
@@ -839,6 +863,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setTargetWaypoint(null);
     setIsAutonomousDriving(false);
     setSlamGrid(Array(3600).fill(-1)); // Clear SLAM map
+    setActiveObstacles(defaultObstacles); // Reset obstacles
 
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({
@@ -916,7 +941,12 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         loadReplaySession,
         setReplayIndex,
         startNewMission,
-        currentMissionId
+        currentMissionId,
+        pathfinderAlgorithm,
+        setPathfinderAlgorithm,
+        activeObstacles,
+        setActiveObstacles,
+        defaultObstacles
       }}
     >
       {children}

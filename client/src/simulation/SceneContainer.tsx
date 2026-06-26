@@ -6,6 +6,7 @@ import { SlamEngine } from '../math/SlamEngine';
 import DisasterZone from './environments/DisasterZone';
 import RoverBase from './rover/RoverBase';
 import RobotArm from './arm/RobotArm';
+import Quadcopter from './drone/Quadcopter';
 
 /**
  * SceneContainer sets up the Three.js canvas.
@@ -18,7 +19,9 @@ export const SceneContainer: React.FC = () => {
     roverRotation, 
     navigationPath, 
     slamResolution,
-    setNavigationWaypoint
+    setNavigationWaypoint,
+    dronePosition,
+    droneRotation
   } = useSimulation();
 
   // Convert A* grid waypoints back to 3D world coordinates [X, Y, Z] for rendering
@@ -80,6 +83,9 @@ export const SceneContainer: React.FC = () => {
         <RoverBase position={roverPosition} rotation={roverRotation}>
           <RobotArm jointValues={jointValues} />
         </RoverBase>
+
+        {/* Quadcopter simulation mesh rendering */}
+        <Quadcopter position={dronePosition} rotation={droneRotation} />
       </Canvas>
 
       {/* Floating 3D Navigation HUD instructions */}

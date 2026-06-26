@@ -20,7 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'pathfinder_node = swarm_manager.pathfinder_node:main'
+            'pathfinder_node = swarm_manager.pathfinder_node:main',
+            'collision_avoidance_node = swarm_manager.collision_avoidance_node:main'
         ],
     },
 )

@@ -129,6 +129,85 @@ export class SlamEngine {
   }
 
   /**
+   * Simulates aerial SLAM mapping from the drone's high-altitude viewpoint.
+   * Maps a circular visibility footprint matching the drone's projection cone.
+   */
+  public static updateAerialSLAM(
+    grid: number[],
+    width: number,
+    height: number,
+    resolution: number,
+    droneX: number,
+    droneZ: number,
+    droneY: number,
+    obstacles: ObstacleData[]
+  ): number[] {
+    const updatedGrid = [...grid];
+    const scanRadius = droneY * 0.9; // field of view proportional to altitude
+    const resolutionRadius = Math.ceil(scanRadius / resolution);
+
+    const droneGrid = this.worldToGrid(droneX, droneZ, width, height, resolution);
+
+    for (let dy = -resolutionRadius; dy <= resolutionRadius; dy++) {
+      for (let dx = -resolutionRadius; dx <= resolutionRadius; dx++) {
+        // Circle constraint check
+        if (dx * dx + dy * dy <= resolutionRadius * resolutionRadius) {
+          const gx = droneGrid.x + dx;
+          const gy = droneGrid.y + dy;
+
+          if (gx >= 0 && gx < width && gy >= 0 && gy < height) {
+            const idx = gy * width + gx;
+            const cellWorld = this.gridToWorld(gx, gy, resolution);
+            
+            // Check collision with any active obstacle
+            let hit = false;
+            for (const obs of obstacles) {
+              const distX = obs.x - cellWorld.x;
+              const distZ = obs.z - cellWorld.z;
+              if (Math.sqrt(distX * distX + distZ * distZ) <= obs.radius + 0.2) {
+                hit = true;
+                break;
+              }
+            }
+            
+            // Map free space or obstacle
+            updatedGrid[idx] = hit ? 100 : 0;
+          }
+        }
+      }
+    }
+    return updatedGrid;
+  }
+
+  /**
+   * Fuses ground SLAM map and aerial drone SLAM map into a single occupancy grid.
+   * Uses worst-case cost mapping: explored maps override unexplored (-1),
+   * and obstacles override free space.
+   */
+  public static fuseMaps(
+    roverGrid: number[],
+    droneGrid: number[]
+  ): number[] {
+    const size = roverGrid.length;
+    const fused = new Array(size);
+    for (let i = 0; i < size; i++) {
+      const rc = roverGrid[i];
+      const dc = droneGrid[i];
+
+      if (rc === -1 && dc === -1) {
+        fused[i] = -1;
+      } else if (rc === -1) {
+        fused[i] = dc;
+      } else if (dc === -1) {
+        fused[i] = rc;
+      } else {
+        fused[i] = Math.max(rc, dc);
+      }
+    }
+    return fused;
+  }
+
+  /**
    * Clears a small 3x3 footprint under the rover to free space.
    */
   private static clearSurroundingCells(grid: number[], cx: number, cy: number, w: number, h: number) {

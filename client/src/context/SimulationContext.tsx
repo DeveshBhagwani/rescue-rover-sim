@@ -54,6 +54,10 @@ interface SimulationContextType {
   setActiveObstacles: React.Dispatch<React.SetStateAction<ObstacleData[]>>;
   defaultObstacles: ObstacleData[];
 
+  // Drone States
+  dronePosition: [number, number, number];
+  droneRotation: [number, number, number];
+
   // Chaos Mode Fault Injection
   chaosSensorNoise: boolean;
   setChaosSensorNoise: (val: boolean) => void;
@@ -236,6 +240,14 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [chaosFrozenJointIndex, setChaosFrozenJointIndex] = useState<number>(1);
   const [chaosFrozenJointAngle, setChaosFrozenJointAngle] = useState<number>(0.3);
   const [chaosBatteryDrop, setChaosBatteryDrop] = useState<boolean>(false);
+
+  // Drone states
+  const [dronePosition, setDronePosition] = useState<[number, number, number]>([0.0, 8.0, 0.0]);
+  const [droneRotation, setDroneRotation] = useState<[number, number, number]>([0.0, 0.0, 0.0]);
+
+  // Collaborative SLAM grids cache
+  const roverSlamGridRef = useRef<number[]>(Array(3600).fill(-1));
+  const droneSlamGridRef = useRef<number[]>(Array(3600).fill(-1));
 
   // Static Rubble coordinate positions matching Rubbles.tsx exactly
   const defaultObstacles = useMemo((): ObstacleData[] => [
@@ -634,18 +646,47 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setBatteryVoltage((prev) => Math.max(0, prev - dt * 0.45));
       }
 
-      // 1. Run SLAM ray-cast calculations
-      setSlamGrid((prevGrid) => {
-        return SlamEngine.updateSLAM(
-          prevGrid,
-          slamWidth,
-          slamHeight,
-          slamResolution,
-          roverPosition[0],
-          roverPosition[2],
-          activeObstacles
-        );
-      });
+      // 1. Run Collaborative SLAM calculations: update ground SLAM cache
+      roverSlamGridRef.current = SlamEngine.updateSLAM(
+        roverSlamGridRef.current,
+        slamWidth,
+        slamHeight,
+        slamResolution,
+        roverPosition[0],
+        roverPosition[2],
+        activeObstacles
+      );
+
+      // 2. Simulate overhead flight path coordinates
+      const t = timestamp / 1000;
+      const droneX = Math.sin(t * 0.25) * 11.5;
+      const droneZ = Math.cos(t * 0.125) * 11.5;
+      const droneY = 7.5 + Math.sin(t * 0.5) * 0.5;
+      const dronePos: [number, number, number] = [droneX, droneY, droneZ];
+      setDronePosition(dronePos);
+
+      // Calculate roll/pitch bank angles based on speed derivatives
+      const droneVx = 0.25 * Math.cos(t * 0.25) * 11.5;
+      const droneVz = -0.125 * Math.sin(t * 0.125) * 11.5;
+      const rollAngle = -droneVx * 0.05;
+      const pitchAngle = droneVz * 0.05;
+      const yawAngle = Math.atan2(droneVx, droneVz);
+      setDroneRotation([rollAngle, pitchAngle, yawAngle]);
+
+      // 3. Update overhead aerial SLAM cache
+      droneSlamGridRef.current = SlamEngine.updateAerialSLAM(
+        droneSlamGridRef.current,
+        slamWidth,
+        slamHeight,
+        slamResolution,
+        droneX,
+        droneZ,
+        droneY,
+        activeObstacles
+      );
+
+      // 4. Fuse Ground and Aerial occupancy grids into a unified costmap
+      setSlamGrid(SlamEngine.fuseMaps(roverSlamGridRef.current, droneSlamGridRef.current));
 
       // 2. Perform base proximity safety check to trigger E-stop
       const baseColl = CollisionDetector.checkBaseCollision(
@@ -935,6 +976,12 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setSlamGrid(Array(3600).fill(-1)); // Clear SLAM map
     setActiveObstacles(defaultObstacles); // Reset obstacles
 
+    // Reset drone pose and maps
+    setDronePosition([0.0, 8.0, 0.0]);
+    setDroneRotation([0.0, 0.0, 0.0]);
+    roverSlamGridRef.current = Array(3600).fill(-1);
+    droneSlamGridRef.current = Array(3600).fill(-1);
+
     // Reset chaos modes
     setChaosSensorNoise(false);
     setChaosPacketLoss(false);
@@ -1024,6 +1071,8 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         activeObstacles,
         setActiveObstacles,
         defaultObstacles,
+        dronePosition,
+        droneRotation,
         chaosSensorNoise,
         setChaosSensorNoise,
         chaosPacketLoss,

@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:6.0
+    container_name: swarm_rover_db
+    ports:
+      - "27017:27017"
+    volumes:
+      - swarm_mongo_data:/data/db
+    networks:
+      - swarm_net
+
+  rover_1_ros2:
+    image: osrf/ros:humble-desktop
+    container_name: swarm_rover_1
+    volumes:
+      - ./ros2_ws:/workspace/ros2_ws
+    working_dir: /workspace/ros2_ws
+    environment:
+      - ROS_DOMAIN_ID=30
+    command: bash -c "source /opt/ros/humble/setup.bash && colcon build && source install/setup.bash && ros2 run swarm_manager collision_avoidance_node --ros-args -r __ns:=/rover_1"
+    depends_on:
+      - mongodb
+    networks:
+      - swarm_net
+
+  rover_2_ros2:
+    image: osrf/ros:humble-desktop
+    container_name: swarm_rover_2
+    volumes:
+      - ./ros2_ws:/workspace/ros2_ws
+    working_dir: /workspace/ros2_ws
+    environment:
+      - ROS_DOMAIN_ID=30
+    command: bash -c "source /opt/ros/humble/setup.bash && colcon build && source install/setup.bash && ros2 run swarm_manager collision_avoidance_node --ros-args -r __ns:=/rover_2"
+    depends_on:
+      - mongodb
+    networks:
+      - swarm_net
+
+  drone_1_ros2:
+    image: osrf/ros:humble-desktop
+    container_name: swarm_drone_1
+    volumes:
+      - ./ros2_ws:/workspace/ros2_ws
+    working_dir: /workspace/ros2_ws
+    environment:
+      - ROS_DOMAIN_ID=30
+    command: bash -c "source /opt/ros/humble/setup.bash && colcon build && source install/setup.bash && ros2 run drone_node drone_node --ros-args -r __ns:=/drone_1"
+    depends_on:
+      - mongodb
+    networks:
+      - swarm_net
+
+networks:
+  swarm_net:
+    driver: bridge
+
+volumes:
+  swarm_mongo_data:

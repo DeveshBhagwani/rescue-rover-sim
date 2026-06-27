@@ -3,10 +3,11 @@
 
 /**
  * KinematicsNode solves joint angles from end-effector positions.
- * In Phase 2, this node will compute:
  * - Forward Kinematics (FK): Joint state angles (q) -> cartesian tip frame.
- * - Inverse Kinematics (IK): Cartesian target -> joint configuration coordinates.
- * - Jacobian Matrix: joint velocities (dq/dt) -> Cartesian task velocities (dx/dt).
+ * - Inverse Kinematics (IK): Cartesian target -> joint configuration
+ * coordinates.
+ * - Jacobian Matrix: joint velocities (dq/dt) -> Cartesian task velocities
+ * (dx/dt).
  */
 class KinematicsNode : public rclcpp::Node {
 public:

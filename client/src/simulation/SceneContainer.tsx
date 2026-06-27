@@ -22,11 +22,11 @@ export const SceneContainer: React.FC<SceneContainerProps> = ({
   isSwarmMode = false,
   selectedAgentId = null
 }) => {
-  const { 
-    jointValues, 
-    roverPosition, 
-    roverRotation, 
-    navigationPath, 
+  const {
+    jointValues,
+    roverPosition,
+    roverRotation,
+    navigationPath,
     slamResolution,
     setNavigationWaypoint,
     dronePosition,
@@ -47,8 +47,8 @@ export const SceneContainer: React.FC<SceneContainerProps> = ({
   const handleGroundClick = (e: any) => {
     // Stop propagation so orbit controls doesn't jitter
     e.stopPropagation();
-    
-    // We only capture clicks on the soil/ground plane (which has name="ground_plane")
+
+    // Only captured clicks on the soil/ground plane (which has name="ground_plane")
     if (e.intersection && e.intersection.point) {
       const { x, z } = e.intersection.point;
       if (isSwarmMode && selectedAgentId) {
@@ -70,8 +70,8 @@ export const SceneContainer: React.FC<SceneContainerProps> = ({
         <fog attach="fog" args={['#090D1A', 10, 25]} />
 
         {/* Orbit Camera Controls */}
-        <OrbitControls 
-          enableDamping 
+        <OrbitControls
+          enableDamping
           dampingFactor={0.05}
           maxPolarAngle={Math.PI / 2 - 0.05} // Limit tilt
           minDistance={2}

@@ -252,7 +252,7 @@ class PathfinderNode(Node):
     def solve_dstarlite(self, start, goal):
         """
         Simplification of D* Lite (Koenig & Likhachev) executed in reverse from goal to start.
-        For static comparisons, we run a full reverse-planning pass.
+        For static comparisons: reverse-planning pass.
         
         D* Lite maintains two estimates:
         - g(u): cost-to-goal estimate.

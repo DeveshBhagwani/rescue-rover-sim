@@ -13,7 +13,7 @@ interface RobotArmProps {
 
 /**
  * RobotArm renders the 6-DOF manipulator assembly.
- * We structure the nested hierarchy to reflect rigid kinematic transforms:
+ * Structure the nested hierarchy to reflect rigid kinematic transforms:
  * Base Plate -> J1 (Revolute Y) -> Link 1 -> J2 (Revolute X) -> Link 2 ->
  * J3 (Prismatic Y) -> Link 3 -> J4/5/6 (Spherical) -> End Effector Gripper
  */
@@ -67,13 +67,13 @@ export const RobotArm: React.FC<RobotArmProps> = ({ jointValues }) => {
                           <boxGeometry args={[0.08, 0.02, 0.03]} />
                           <meshStandardMaterial color="#06B6D4" roughness={0.3} metalness={0.8} />
                         </mesh>
-                        
+
                         {/* Left Finger */}
                         <mesh position={[-0.03, 0.03, 0]} castShadow>
                           <boxGeometry args={[0.015, 0.05, 0.01]} />
                           <meshStandardMaterial color="#1E293B" metalness={0.7} />
                         </mesh>
-                        
+
                         {/* Right Finger */}
                         <mesh position={[0.03, 0.03, 0]} castShadow>
                           <boxGeometry args={[0.015, 0.05, 0.01]} />

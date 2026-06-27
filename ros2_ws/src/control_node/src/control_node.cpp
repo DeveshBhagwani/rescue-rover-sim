@@ -2,8 +2,8 @@
 #include "std_msgs/msg/string.hpp"
 
 /**
- * ControlNode handles actuators joint positioning and closed-loop motor PID control.
- * In Phase 3 & 4, it implements:
+ * ControlNode handles actuators joint positioning and closed-loop motor PID
+ * control.
  * - Proportional-Integral-Derivative (PID) corrections
  * - PWM/Force duty output mapping
  * - Trajectory-following control error minimization

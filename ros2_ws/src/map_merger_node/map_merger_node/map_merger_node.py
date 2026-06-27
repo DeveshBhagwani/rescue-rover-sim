@@ -44,7 +44,7 @@ class MapMergerNode(Node):
         1. Multi-Resolution Grid Resampling:
            - Ground map is high resolution (60x60 cells, 0.5m/cell).
            - Aerial map is low resolution (30x30 cells, 1.0m/cell).
-           - We scale the aerial grid by a factor of 2 in each dimension to match
+           - Scaled the aerial grid by a factor of 2 in each dimension to match
              the ground coordinates frame, creating a synchronized 60x60 overlay.
         
         2. Bayesian Probability Fusion:
